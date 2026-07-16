@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "project": {
+    "name": "Auslandssemester in Shanghai",
+    "goal_description": "Bewerbung für ein Austauschsemester in Shanghai vorbereiten und einreichen."
+  },
+  "nodes": [
+    { "id": "n1", "type": "task", "title": "Wirf ein einzelnes Blatt Papier in den Papierkorb", "icon": "trash", "tier": 0 },
+    { "id": "n2", "type": "task", "title": "Steh auf und räume den Schreibtisch frei", "icon": "pencil", "tier": 1 },
+    { "id": "n3", "type": "task", "title": "Liste der Zielhochschulen recherchieren", "icon": "questionmark.circle", "tier": 0 },
+    { "id": "n4", "type": "capstone", "title": "Bewerbungsunterlagen einreichen", "icon": "arrow.up", "tier": 2 }
+  ],
+  "edges": [
+    { "from": "n1", "to": "n2" },
+    { "from": "n2", "to": "n4" },
+    { "from": "n3", "to": "n4" }
+  ]
+}
