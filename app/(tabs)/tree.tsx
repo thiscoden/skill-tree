@@ -9,6 +9,7 @@ import { TreeCanvas } from '@/components/skill-tree/tree-canvas';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { useActiveProjectId } from '@/hooks/use-active-project-id';
 import { useSkillTreeViewModel } from '@/viewmodel/skill-tree-viewmodel';
+import { markMastered, markUnmastered } from '@/domain/mastery';
 
 export default function TreeScreen() {
   const [activeProjectId] = useActiveProjectId();
@@ -20,6 +21,19 @@ export default function TreeScreen() {
       reload();
     }, [reload])
   );
+
+  const handleToggleMastery = async (id: string) => {
+    if (!activeProjectId) return;
+    const node = nodes.find((n) => n.id === id);
+    if (!node) return;
+
+    if (node.state === 'mastered') {
+      await markUnmastered(activeProjectId, id);
+    } else if (node.state === 'available') {
+      await markMastered(id);
+    }
+    reload();
+  };
 
   if (!activeProjectId) {
     return (
@@ -48,7 +62,12 @@ export default function TreeScreen() {
           Noch keine Knoten. Tippe auf + um deinen ersten Schritt anzulegen.
         </ThemedText>
       ) : (
-        <TreeCanvas nodes={nodes} edges={edges} onNodePress={(id) => router.push(`/node/${id}`)} />
+        <TreeCanvas
+          nodes={nodes}
+          edges={edges}
+          onNodePress={handleToggleMastery}
+          onNodeLongPress={(id) => router.push(`/node/${id}`)}
+        />
       )}
     </ThemedView>
   );

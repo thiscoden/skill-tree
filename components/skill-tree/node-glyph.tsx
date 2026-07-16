@@ -40,9 +40,10 @@ interface NodeGlyphProps {
   type: NodeType;
   state: NodeState;
   onPress: () => void;
+  onLongPress?: () => void;
 }
 
-export function NodeGlyph({ title, icon, type, state, onPress }: NodeGlyphProps) {
+export function NodeGlyph({ title, icon, type, state, onPress, onLongPress }: NodeGlyphProps) {
   const color = STATE_COLOR[state];
   const pulse = useSharedValue(0);
 
@@ -83,7 +84,11 @@ export function NodeGlyph({ title, icon, type, state, onPress }: NodeGlyphProps)
 
   return (
     <View style={styles.wrapper}>
-      <Pressable onPress={onPress} disabled={state === 'locked'} style={styles.shapeContainer}>
+      <Pressable
+        onPress={onPress}
+        onLongPress={onLongPress}
+        disabled={state === 'locked'}
+        style={styles.shapeContainer}>
         {state === 'mastered' && (
           <Animated.View style={[styles.glow, glowStyle]} pointerEvents="none">
             {type === 'capstone' ? (

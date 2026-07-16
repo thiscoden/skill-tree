@@ -13,6 +13,7 @@ interface TreeCanvasProps {
   nodes: SkillNode[];
   edges: EdgeVM[];
   onNodePress: (id: string) => void;
+  onNodeLongPress: (id: string) => void;
 }
 
 const MIN_SCALE = 0.5;
@@ -26,8 +27,8 @@ const EDGE_COLOR: Record<SkillNode['state'], string> = {
   mastered: '#FFD54A',
 };
 
-export function TreeCanvas({ nodes, edges, onNodePress }: TreeCanvasProps) {
-  const { positions, width, height } = useMemo(() => computeLayout(nodes), [nodes]);
+export function TreeCanvas({ nodes, edges, onNodePress, onNodeLongPress }: TreeCanvasProps) {
+  const { positions, width, height } = useMemo(() => computeLayout(nodes, edges), [nodes, edges]);
   const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
 
   const translateX = useSharedValue(0);
@@ -101,6 +102,7 @@ export function TreeCanvas({ nodes, edges, onNodePress }: TreeCanvasProps) {
                   type={node.type}
                   state={node.state}
                   onPress={() => onNodePress(node.id)}
+                  onLongPress={() => onNodeLongPress(node.id)}
                 />
               </View>
             );
