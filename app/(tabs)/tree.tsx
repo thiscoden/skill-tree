@@ -10,6 +10,7 @@ import { useThemeColor } from '@/hooks/use-theme-color';
 import { useActiveProjectId } from '@/hooks/use-active-project-id';
 import { useSkillTreeViewModel } from '@/viewmodel/skill-tree-viewmodel';
 import { markMastered, markUnmastered } from '@/domain/mastery';
+import { SkillTreeColors } from '@/constants/skill-tree-theme';
 
 export default function TreeScreen() {
   const [activeProjectId] = useActiveProjectId();
@@ -62,12 +63,14 @@ export default function TreeScreen() {
           Noch keine Knoten. Tippe auf + um deinen ersten Schritt anzulegen.
         </ThemedText>
       ) : (
-        <TreeCanvas
-          nodes={nodes}
-          edges={edges}
-          onNodePress={handleToggleMastery}
-          onNodeLongPress={(id) => router.push(`/node/${id}`)}
-        />
+        <View style={styles.canvasBackground}>
+          <TreeCanvas
+            nodes={nodes}
+            edges={edges}
+            onNodePress={handleToggleMastery}
+            onNodeLongPress={(id) => router.push(`/node/${id}`)}
+          />
+        </View>
       )}
     </ThemedView>
   );
@@ -75,6 +78,7 @@ export default function TreeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, paddingTop: 60 },
+  canvasBackground: { flex: 1, backgroundColor: SkillTreeColors.background },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',

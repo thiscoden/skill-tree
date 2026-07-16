@@ -16,7 +16,7 @@ interface ImportEdge {
   to: string;
 }
 
-interface ImportPayload {
+export interface ImportPayload {
   schema_version: string;
   project: { name: string; goal_description: string };
   nodes: ImportNode[];

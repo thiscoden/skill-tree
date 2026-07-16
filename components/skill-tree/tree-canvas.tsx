@@ -6,6 +6,7 @@ import Svg, { Line } from 'react-native-svg';
 
 import { NodeGlyph } from './node-glyph';
 import { computeLayout } from './layout';
+import { SkillTreeColors } from '@/constants/skill-tree-theme';
 import type { SkillNode } from '@/db/types';
 import type { EdgeVM } from '@/viewmodel/skill-tree-viewmodel';
 
@@ -22,9 +23,9 @@ const NODE_HALF_WIDTH = 42;
 const SHAPE_CENTER_OFFSET = 28;
 
 const EDGE_COLOR: Record<SkillNode['state'], string> = {
-  locked: '#444444',
-  available: '#3B82F6',
-  mastered: '#FFD54A',
+  locked: SkillTreeColors.edge.inactive,
+  available: SkillTreeColors.edge.inactive,
+  mastered: SkillTreeColors.edge.active,
 };
 
 export function TreeCanvas({ nodes, edges, onNodePress, onNodeLongPress }: TreeCanvasProps) {
@@ -82,8 +83,8 @@ export function TreeCanvas({ nodes, edges, onNodePress, onNodeLongPress }: TreeC
                   x2={to.x}
                   y2={to.y + SHAPE_CENTER_OFFSET}
                   stroke={color}
-                  strokeWidth={targetNode.state === 'mastered' ? 4 : 2}
-                  strokeOpacity={targetNode.state === 'locked' ? 0.4 : 0.9}
+                  strokeWidth={targetNode.state === 'mastered' ? 5 : 2}
+                  strokeOpacity={targetNode.state === 'mastered' ? 1 : 0.55}
                 />
               );
             })}
@@ -114,6 +115,6 @@ export function TreeCanvas({ nodes, edges, onNodePress, onNodeLongPress }: TreeC
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, overflow: 'hidden' },
+  container: { flex: 1, overflow: 'hidden', backgroundColor: SkillTreeColors.background },
   nodeWrapper: { position: 'absolute', width: 84, alignItems: 'center' },
 });
