@@ -42,6 +42,8 @@ const MAPPING = {
   'ellipsis': 'more-horiz',
   'archivebox.fill': 'archive',
   'arrow.uturn.backward': 'undo',
+  'line.3.horizontal': 'menu',
+  'magnifyingglass': 'search',
 } as IconMapping;
 
 /**

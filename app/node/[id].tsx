@@ -4,7 +4,7 @@ import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { IconSymbol } from '@/components/ui/icon-symbol';
+import { SkillIcon } from '@/components/icons/skill-icon';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import * as nodesRepo from '@/db/repositories/nodes-repo';
 import * as edgesRepo from '@/db/repositories/edges-repo';
@@ -62,7 +62,7 @@ export default function NodeDetailScreen() {
   return (
     <ThemedView style={styles.container}>
       <View style={styles.headerRow}>
-        <IconSymbol name={(node.icon as never) ?? 'square.fill'} size={28} color={tint} />
+        <SkillIcon id={node.icon} size={28} />
         <ThemedText type="title" style={styles.title}>
           {node.title}
         </ThemedText>

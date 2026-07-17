@@ -3,6 +3,8 @@ import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native
 
 import { ThemedText } from '@/components/themed-text';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { SkillIcon } from '@/components/icons/skill-icon';
+import { IconPickerModal } from '@/components/icons/icon-picker-modal';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import type { NodeType, SkillNode } from '@/db/types';
 
@@ -24,7 +26,8 @@ export function NodeForm({ candidatePrerequisites, submitLabel, onSubmit }: Node
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [type, setType] = useState<NodeType>('task');
-  const [icon, setIcon] = useState('');
+  const [icon, setIcon] = useState<string | null>(null);
+  const [pickerVisible, setPickerVisible] = useState(false);
   const [prerequisiteIds, setPrerequisiteIds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
@@ -46,7 +49,7 @@ export function NodeForm({ candidatePrerequisites, submitLabel, onSubmit }: Node
         title: title.trim(),
         description: description.trim(),
         type,
-        icon: icon.trim() || null,
+        icon,
         prerequisiteIds,
       });
     } finally {
@@ -97,14 +100,21 @@ export function NodeForm({ candidatePrerequisites, submitLabel, onSubmit }: Node
       </View>
 
       <ThemedText type="defaultSemiBold" style={styles.label}>
-        SF-Symbol (optional)
+        Icon (optional)
       </ThemedText>
-      <TextInput
-        value={icon}
-        onChangeText={setIcon}
-        placeholder="z. B. paperplane.fill"
-        placeholderTextColor="#888"
-        style={[styles.input, { color: textColor, borderColor }]}
+      <Pressable onPress={() => setPickerVisible(true)} style={[styles.iconTrigger, { borderColor }]}>
+        <IconSymbol name="line.3.horizontal" size={18} color={textColor} />
+        {icon ? (
+          <SkillIcon id={icon} size={32} />
+        ) : (
+          <ThemedText style={styles.iconTriggerLabel}>Icon wählen…</ThemedText>
+        )}
+      </Pressable>
+      <IconPickerModal
+        visible={pickerVisible}
+        selectedId={icon}
+        onSelect={setIcon}
+        onClose={() => setPickerVisible(false)}
       />
 
       {candidatePrerequisites.length > 0 && (
@@ -148,6 +158,17 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   multiline: { minHeight: 80, textAlignVertical: 'top' },
+  iconTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    borderCurve: 'continuous',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+  },
+  iconTriggerLabel: { opacity: 0.6 },
   typeRow: { flexDirection: 'row', gap: 12 },
   typeButton: {
     flexDirection: 'row',

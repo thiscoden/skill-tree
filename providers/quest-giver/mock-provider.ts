@@ -7,15 +7,15 @@ interface Template {
 }
 
 const BABY_STEP_TEMPLATES: Template[] = [
-  { title: (goal) => `Verbringe 5 Minuten mit Recherche zu "${goal}"`, icon: 'magnifyingglass', type: 'task' },
-  { title: () => 'Schreibe drei Stichpunkte zum nächsten konkreten Schritt auf', icon: 'pencil', type: 'task' },
-  { title: () => 'Öffne eine leere Notiz und tippe nur den ersten Satz', icon: 'pencil', type: 'task' },
+  { title: (goal) => `Verbringe 5 Minuten mit Recherche zu "${goal}"`, icon: '15', type: 'task' },
+  { title: () => 'Schreibe drei Stichpunkte zum nächsten konkreten Schritt auf', icon: '2', type: 'task' },
+  { title: () => 'Öffne eine leere Notiz und tippe nur den ersten Satz', icon: '3', type: 'task' },
   {
     title: (goal) => `Frage jemanden, der "${goal}" schon geschafft hat, um einen Tipp`,
-    icon: 'person.fill',
+    icon: '13',
     type: 'task',
   },
-  { title: () => 'Räume 2 Minuten lang deinen Arbeitsbereich auf, bevor du startest', icon: 'trash', type: 'task' },
+  { title: () => 'Räume 2 Minuten lang deinen Arbeitsbereich auf, bevor du startest', icon: '6', type: 'task' },
 ];
 
 function delay(ms: number): Promise<void> {
@@ -44,7 +44,7 @@ export class MockQuestGiverProvider implements QuestGiverProvider {
 
     return {
       title: `Mach jetzt 5 Minuten weiter an "${goal}"`,
-      icon: 'sparkles',
+      icon: '12',
       type: 'task',
     };
   }

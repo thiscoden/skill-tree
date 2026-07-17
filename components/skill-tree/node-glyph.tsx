@@ -11,7 +11,8 @@ import Animated, {
 import Svg, { Polygon } from 'react-native-svg';
 
 import { ThemedText } from '@/components/themed-text';
-import { IconSymbol } from '@/components/ui/icon-symbol';
+import { SkillIcon } from '@/components/icons/skill-icon';
+import { findSkillIcon } from '@/constants/skill-icons';
 import { SkillTreeColors } from '@/constants/skill-tree-theme';
 import type { NodeState, NodeType } from '@/db/types';
 
@@ -83,7 +84,7 @@ export function NodeGlyph({ title, icon, type, state, onPress, onLongPress, badg
     opacity: state === 'mastered' ? 0.25 + pulse.value * 0.35 : 0,
   }));
 
-  const iconName = (icon as never) ?? (type === 'capstone' ? 'hexagon.fill' : 'square.fill');
+  const skillIcon = findSkillIcon(icon);
 
   return (
     <View style={styles.wrapper}>
@@ -106,17 +107,28 @@ export function NodeGlyph({ title, icon, type, state, onPress, onLongPress, badg
 
         <Animated.View style={[styles.shapeAnimated, pulseStyle]}>
           {type === 'capstone' ? (
-            <Svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`}>
-              <Polygon points={OCTAGON_POINTS} fill={SkillTreeColors.node.background} stroke={color} strokeWidth={3} />
+            <Svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} style={StyleSheet.absoluteFill}>
+              <Polygon
+                points={OCTAGON_POINTS}
+                fill={skillIcon ? 'transparent' : SkillTreeColors.node.background}
+                stroke={color}
+                strokeWidth={3}
+              />
             </Svg>
           ) : (
-            <View style={[styles.taskShape, { borderColor: color, backgroundColor: SkillTreeColors.node.background }]} />
+            <View
+              style={[
+                styles.taskShape,
+                { borderColor: color, backgroundColor: skillIcon ? 'transparent' : SkillTreeColors.node.background },
+              ]}
+            />
           )}
+          {skillIcon ? (
+            <View style={styles.iconArt} pointerEvents="none">
+              <SkillIcon id={skillIcon.id} size={type === 'capstone' ? 44 : 48} />
+            </View>
+          ) : null}
         </Animated.View>
-
-        <View style={styles.iconOverlay} pointerEvents="none">
-          <IconSymbol name={iconName} size={22} color={color} />
-        </View>
 
         {state !== 'locked' && badge ? (
           <View style={styles.badge} pointerEvents="none">
@@ -163,7 +175,14 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderCurve: 'continuous',
   },
-  iconOverlay: { position: 'absolute', alignItems: 'center', justifyContent: 'center' },
+  iconArt: {
+    position: 'absolute',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+    borderCurve: 'continuous',
+    overflow: 'hidden',
+  },
   badge: {
     position: 'absolute',
     right: -6,
