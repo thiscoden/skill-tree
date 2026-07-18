@@ -21,7 +21,7 @@ export default function NewNodeScreen() {
   const handleSubmit = async (values: NodeFormValues) => {
     const node = await nodesRepo.createNode({
       projectId: activeProjectId,
-      type: values.type,
+      type: 'task',
       title: values.title,
       description: values.description,
       icon: values.icon,

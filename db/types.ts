@@ -1,4 +1,4 @@
-export type NodeType = 'task' | 'capstone';
+export type NodeType = 'task';
 export type NodeState = 'locked' | 'available' | 'mastered';
 export type NodeSource = 'manual' | 'orb';
 

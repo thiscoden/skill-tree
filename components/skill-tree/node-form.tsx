@@ -6,12 +6,11 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { SkillIcon } from '@/components/icons/skill-icon';
 import { IconPickerModal } from '@/components/icons/icon-picker-modal';
 import { useThemeColor } from '@/hooks/use-theme-color';
-import type { NodeType, SkillNode } from '@/db/types';
+import type { SkillNode } from '@/db/types';
 
 export interface NodeFormValues {
   title: string;
   description: string;
-  type: NodeType;
   icon: string | null;
   prerequisiteIds: string[];
 }
@@ -25,7 +24,6 @@ interface NodeFormProps {
 export function NodeForm({ candidatePrerequisites, submitLabel, onSubmit }: NodeFormProps) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [type, setType] = useState<NodeType>('task');
   const [icon, setIcon] = useState<string | null>(null);
   const [pickerVisible, setPickerVisible] = useState(false);
   const [prerequisiteIds, setPrerequisiteIds] = useState<string[]>([]);
@@ -48,7 +46,6 @@ export function NodeForm({ candidatePrerequisites, submitLabel, onSubmit }: Node
       await onSubmit({
         title: title.trim(),
         description: description.trim(),
-        type,
         icon,
         prerequisiteIds,
       });
@@ -80,24 +77,6 @@ export function NodeForm({ candidatePrerequisites, submitLabel, onSubmit }: Node
         numberOfLines={3}
         style={[styles.input, styles.multiline, { color: textColor, borderColor }]}
       />
-
-      <ThemedText type="defaultSemiBold" style={styles.label}>
-        Typ
-      </ThemedText>
-      <View style={styles.typeRow}>
-        <Pressable
-          onPress={() => setType('task')}
-          style={[styles.typeButton, { borderColor }, type === 'task' && { borderColor: tint, borderWidth: 2 }]}>
-          <IconSymbol name="square.fill" size={16} color={type === 'task' ? tint : textColor} />
-          <ThemedText>Task</ThemedText>
-        </Pressable>
-        <Pressable
-          onPress={() => setType('capstone')}
-          style={[styles.typeButton, { borderColor }, type === 'capstone' && { borderColor: tint, borderWidth: 2 }]}>
-          <IconSymbol name="hexagon.fill" size={16} color={type === 'capstone' ? tint : textColor} />
-          <ThemedText>Capstone</ThemedText>
-        </Pressable>
-      </View>
 
       <ThemedText type="defaultSemiBold" style={styles.label}>
         Icon (optional)
@@ -169,17 +148,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   iconTriggerLabel: { opacity: 0.6 },
-  typeRow: { flexDirection: 'row', gap: 12 },
-  typeButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 12,
-    borderCurve: 'continuous',
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-  },
   prereqRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
   prereqLabel: { flex: 1 },
   button: {

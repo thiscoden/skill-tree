@@ -8,27 +8,13 @@ import Animated, {
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
-import Svg, { Polygon } from 'react-native-svg';
-
 import { ThemedText } from '@/components/themed-text';
 import { SkillIcon } from '@/components/icons/skill-icon';
 import { findSkillIcon } from '@/constants/skill-icons';
 import { SkillTreeColors } from '@/constants/skill-tree-theme';
-import type { NodeState, NodeType } from '@/db/types';
+import type { NodeState } from '@/db/types';
 
 const SIZE = 56;
-
-function octagonPoints(size: number): string {
-  const r = size / 2;
-  const points: string[] = [];
-  for (let i = 0; i < 8; i++) {
-    const angle = (Math.PI / 4) * i + Math.PI / 8;
-    points.push(`${r + r * Math.cos(angle)},${r + r * Math.sin(angle)}`);
-  }
-  return points.join(' ');
-}
-
-const OCTAGON_POINTS = octagonPoints(SIZE);
 
 const STATE_BORDER: Record<NodeState, string> = {
   locked: SkillTreeColors.node.locked.border,
@@ -39,7 +25,6 @@ const STATE_BORDER: Record<NodeState, string> = {
 interface NodeGlyphProps {
   title: string;
   icon: string | null;
-  type: NodeType;
   state: NodeState;
   onPress: () => void;
   onLongPress?: () => void;
@@ -47,7 +32,7 @@ interface NodeGlyphProps {
   badge?: string;
 }
 
-export function NodeGlyph({ title, icon, type, state, onPress, onLongPress, badge = '1/1' }: NodeGlyphProps) {
+export function NodeGlyph({ title, icon, state, onPress, onLongPress, badge = '1/1' }: NodeGlyphProps) {
   const color = STATE_BORDER[state];
   const pulse = useSharedValue(0);
 
@@ -95,37 +80,20 @@ export function NodeGlyph({ title, icon, type, state, onPress, onLongPress, badg
         style={styles.shapeContainer}>
         {state === 'mastered' && (
           <Animated.View style={[styles.glow, glowStyle]} pointerEvents="none">
-            {type === 'capstone' ? (
-              <Svg width={SIZE * 1.4} height={SIZE * 1.4} viewBox={`0 0 ${SIZE} ${SIZE}`}>
-                <Polygon points={OCTAGON_POINTS} fill={SkillTreeColors.node.mastered.glow} />
-              </Svg>
-            ) : (
-              <View style={[styles.glowSquare, { backgroundColor: SkillTreeColors.node.mastered.glow }]} />
-            )}
+            <View style={[styles.glowSquare, { backgroundColor: SkillTreeColors.node.mastered.glow }]} />
           </Animated.View>
         )}
 
         <Animated.View style={[styles.shapeAnimated, pulseStyle]}>
-          {type === 'capstone' ? (
-            <Svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} style={StyleSheet.absoluteFill}>
-              <Polygon
-                points={OCTAGON_POINTS}
-                fill={skillIcon ? 'transparent' : SkillTreeColors.node.background}
-                stroke={color}
-                strokeWidth={3}
-              />
-            </Svg>
-          ) : (
-            <View
-              style={[
-                styles.taskShape,
-                { borderColor: color, backgroundColor: skillIcon ? 'transparent' : SkillTreeColors.node.background },
-              ]}
-            />
-          )}
+          <View
+            style={[
+              styles.taskShape,
+              { borderColor: color, backgroundColor: skillIcon ? 'transparent' : SkillTreeColors.node.background },
+            ]}
+          />
           {skillIcon ? (
             <View style={styles.iconArt} pointerEvents="none">
-              <SkillIcon id={skillIcon.id} size={type === 'capstone' ? 44 : 48} />
+              <SkillIcon id={skillIcon.id} size={48} />
             </View>
           ) : null}
         </Animated.View>

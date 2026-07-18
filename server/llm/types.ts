@@ -2,7 +2,7 @@ export interface LlmStructuredStep {
   title: string;
   description?: string;
   icon?: string;
-  type: 'task' | 'capstone';
+  type: 'task';
 }
 
 export interface LlmPrompt {

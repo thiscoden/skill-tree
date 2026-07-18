@@ -100,7 +100,6 @@ export function TreeCanvas({ nodes, edges, onNodePress, onNodeLongPress }: TreeC
                 <NodeGlyph
                   title={node.title}
                   icon={node.icon}
-                  type={node.type}
                   state={node.state}
                   onPress={() => onNodePress(node.id)}
                   onLongPress={() => onNodeLongPress(node.id)}

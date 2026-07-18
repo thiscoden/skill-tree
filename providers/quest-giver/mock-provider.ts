@@ -3,7 +3,7 @@ import type { QuestGiverInput, QuestGiverProvider, QuestGiverSuggestion } from '
 interface Template {
   title: (goal: string) => string;
   icon: string;
-  type: 'task' | 'capstone';
+  type: 'task';
 }
 
 const BABY_STEP_TEMPLATES: Template[] = [
