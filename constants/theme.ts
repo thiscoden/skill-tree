@@ -13,6 +13,8 @@ export const Colors = {
     text: '#11181C',
     background: '#fff',
     tint: tintColorLight,
+    /** Label color for buttons/badges filled with `tint` — must stay readable against it. */
+    tintText: '#fff',
     icon: '#687076',
     tabIconDefault: '#687076',
     tabIconSelected: tintColorLight,
@@ -21,6 +23,8 @@ export const Colors = {
     text: '#ECEDEE',
     background: '#151718',
     tint: tintColorDark,
+    /** tint is white in dark mode, so text on a tint-filled button must be dark, not '#fff'. */
+    tintText: '#151718',
     icon: '#9BA1A6',
     tabIconDefault: '#9BA1A6',
     tabIconSelected: tintColorDark,

@@ -5,8 +5,9 @@ import { getLlmClient } from '@/server/llm';
 // below are the only things standing between it and an open cost-abuse vector.
 const MAX_GOAL_LENGTH = 500;
 const MAX_NOTE_LENGTH = 500;
-const MAX_EXISTING_TITLES = 50;
+const MAX_EXISTING_NODES = 50;
 const MAX_TITLE_LENGTH = 200;
+const MAX_ID_LENGTH = 100;
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 10;
@@ -35,11 +36,15 @@ export async function POST(request: Request) {
   const projectGoal = typeof body.projectGoal === 'string' ? body.projectGoal.slice(0, MAX_GOAL_LENGTH) : '';
   const strugglingNote =
     typeof body.strugglingNote === 'string' ? body.strugglingNote.slice(0, MAX_NOTE_LENGTH) : undefined;
-  const existingNodeTitles = Array.isArray(body.existingNodeTitles)
-    ? body.existingNodeTitles
-        .filter((t: unknown): t is string => typeof t === 'string')
-        .slice(0, MAX_EXISTING_TITLES)
-        .map((t: string) => t.slice(0, MAX_TITLE_LENGTH))
+  const existingNodes = Array.isArray(body.existingNodes)
+    ? body.existingNodes
+        .filter((n: unknown): n is { id: unknown; title: unknown } => typeof n === 'object' && n !== null)
+        .map((n: { id: unknown; title: unknown }) => ({
+          id: typeof n.id === 'string' ? n.id.slice(0, MAX_ID_LENGTH) : '',
+          title: typeof n.title === 'string' ? n.title.slice(0, MAX_TITLE_LENGTH) : '',
+        }))
+        .filter((n: { id: string; title: string }) => n.id && n.title)
+        .slice(0, MAX_EXISTING_NODES)
     : [];
 
   if (!projectGoal) {
@@ -48,7 +53,7 @@ export async function POST(request: Request) {
 
   try {
     const llm = getLlmClient();
-    const step = await llm.generateStructuredStep({ projectGoal, strugglingNote, existingNodeTitles });
+    const step = await llm.generateStructuredStep({ projectGoal, strugglingNote, existingNodes });
     return Response.json(step);
   } catch (error) {
     console.error('quest-giver endpoint failed', error);

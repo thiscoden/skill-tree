@@ -16,6 +16,7 @@ export default function NodeDetailScreen() {
   const [node, setNode] = useState<SkillNode | null>(null);
   const [prerequisites, setPrerequisites] = useState<SkillNode[]>([]);
   const tint = useThemeColor({}, 'tint');
+  const tintText = useThemeColor({}, 'tintText');
 
   const reload = useCallback(async () => {
     const n = await nodesRepo.getNode(id);
@@ -87,7 +88,7 @@ export default function NodeDetailScreen() {
 
       {node.state !== 'mastered' && unmet.length === 0 && (
         <Pressable onPress={handleMarkMastered} style={[styles.button, { backgroundColor: tint }]}>
-          <ThemedText style={styles.buttonLabel}>Als gemeistert markieren</ThemedText>
+          <ThemedText style={[styles.buttonLabel, { color: tintText }]}>Als gemeistert markieren</ThemedText>
         </Pressable>
       )}
 
@@ -113,7 +114,7 @@ const styles = StyleSheet.create({
     borderCurve: 'continuous',
     alignItems: 'center',
   },
-  buttonLabel: { color: '#fff', fontWeight: '600', fontSize: 16 },
+  buttonLabel: { fontWeight: '600', fontSize: 16 },
   deleteButton: { marginTop: 24, alignItems: 'center', paddingVertical: 10 },
   deleteLabel: { color: '#E5484D' },
 });

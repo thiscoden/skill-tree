@@ -23,6 +23,7 @@ export function ProjectForm({ initialValues, submitLabel, onSubmit }: ProjectFor
 
   const textColor = useThemeColor({}, 'text');
   const tint = useThemeColor({}, 'tint');
+  const tintText = useThemeColor({}, 'tintText');
   const borderColor = useThemeColor({ light: '#E0E0E0', dark: '#333' }, 'text');
 
   const canSubmit = name.trim().length > 0 && !submitting;
@@ -67,7 +68,7 @@ export function ProjectForm({ initialValues, submitLabel, onSubmit }: ProjectFor
         onPress={handleSubmit}
         disabled={!canSubmit}
         style={[styles.button, { backgroundColor: tint, opacity: canSubmit ? 1 : 0.5 }]}>
-        <ThemedText style={styles.buttonLabel}>{submitLabel}</ThemedText>
+        <ThemedText style={[styles.buttonLabel, { color: tintText }]}>{submitLabel}</ThemedText>
       </Pressable>
     </ThemedView>
   );
@@ -100,7 +101,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   buttonLabel: {
-    color: '#fff',
     fontWeight: '600',
     fontSize: 16,
   },

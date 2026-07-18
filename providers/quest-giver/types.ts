@@ -1,14 +1,21 @@
+export interface QuestGiverExistingNode {
+  id: string;
+  title: string;
+}
+
 export interface QuestGiverSuggestion {
   title: string;
   description?: string;
   icon?: string;
   type: 'task';
+  /** Ids (from QuestGiverInput.existingNodes) of steps that must be done before this one. */
+  prerequisiteNodeIds: string[];
 }
 
 export interface QuestGiverInput {
   projectGoal: string;
   strugglingNote?: string;
-  existingNodeTitles: string[];
+  existingNodes: QuestGiverExistingNode[];
 }
 
 /**

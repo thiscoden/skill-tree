@@ -13,6 +13,7 @@ export default function ProfileScreen() {
   const [, setActiveProjectId] = useActiveProjectId();
   const [loading, setLoading] = useState(false);
   const tint = useThemeColor({}, 'tint');
+  const tintText = useThemeColor({}, 'tintText');
 
   const handleLoadFixture = async () => {
     setLoading(true);
@@ -38,7 +39,7 @@ export default function ProfileScreen() {
         onPress={handleLoadFixture}
         disabled={loading}
         style={[styles.button, { backgroundColor: tint, opacity: loading ? 0.6 : 1 }]}>
-        <ThemedText style={styles.buttonLabel}>
+        <ThemedText style={[styles.buttonLabel, { color: tintText }]}>
           {loading ? 'Lädt…' : 'Beispiel-Skilltree laden (Shanghai-Fixture)'}
         </ThemedText>
       </Pressable>
@@ -61,5 +62,5 @@ const styles = StyleSheet.create({
     borderCurve: 'continuous',
     alignItems: 'center',
   },
-  buttonLabel: { color: '#fff', fontWeight: '600', fontSize: 15 },
+  buttonLabel: { fontWeight: '600', fontSize: 15 },
 });

@@ -7,7 +7,6 @@ import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useDatabaseReady } from '@/hooks/use-database-ready';
-import { FloatingOrb } from '@/components/orb/floating-orb';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -42,10 +41,6 @@ export default function RootLayout() {
                   }}
                 />
               </Stack>
-
-              <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
-                <FloatingOrb />
-              </View>
             </View>
 
             <StatusBar style="auto" />

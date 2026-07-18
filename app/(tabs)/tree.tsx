@@ -6,6 +6,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { TreeCanvas } from '@/components/skill-tree/tree-canvas';
+import { FloatingOrb } from '@/components/orb/floating-orb';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { useActiveProjectId } from '@/hooks/use-active-project-id';
 import { useSkillTreeViewModel } from '@/viewmodel/skill-tree-viewmodel';
@@ -72,6 +73,10 @@ export default function TreeScreen() {
           />
         </View>
       )}
+
+      <View pointerEvents="box-none" style={styles.orbLayer}>
+        <FloatingOrb />
+      </View>
     </ThemedView>
   );
 }
@@ -79,6 +84,12 @@ export default function TreeScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, paddingTop: 60 },
   canvasBackground: { flex: 1, backgroundColor: SkillTreeColors.background },
+  orbLayer: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    paddingBottom: 24,
+  },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',

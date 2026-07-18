@@ -4,11 +4,13 @@ import { router } from 'expo-router';
 
 import { ThemedText } from '@/components/themed-text';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { SkillIcon } from '@/components/icons/skill-icon';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { useActiveProjectId } from '@/hooks/use-active-project-id';
 import { getQuestGiverProvider } from '@/providers/quest-giver';
 import * as projectsRepo from '@/db/repositories/projects-repo';
 import * as nodesRepo from '@/db/repositories/nodes-repo';
+import * as edgesRepo from '@/db/repositories/edges-repo';
 import type { QuestGiverSuggestion } from '@/providers/quest-giver/types';
 
 export default function QuestAssistScreen() {
@@ -20,6 +22,7 @@ export default function QuestAssistScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const tint = useThemeColor({}, 'tint');
+  const tintText = useThemeColor({}, 'tintText');
   const textColor = useThemeColor({}, 'text');
   const borderColor = useThemeColor({ light: '#E0E0E0', dark: '#333' }, 'text');
   const background = useThemeColor({}, 'background');
@@ -43,7 +46,7 @@ export default function QuestAssistScreen() {
       const result = await provider.suggestNextStep({
         projectGoal: goalDescription,
         strugglingNote: strugglingNote.trim() || undefined,
-        existingNodeTitles: existingNodes.map((n) => n.title),
+        existingNodes: existingNodes.map((n) => ({ id: n.id, title: n.title })),
       });
       setSuggestion(result);
     } catch {
@@ -55,15 +58,19 @@ export default function QuestAssistScreen() {
 
   const handleAccept = async () => {
     if (!activeProjectId || !suggestion) return;
-    await nodesRepo.createNode({
+    const prerequisiteIds = suggestion.prerequisiteNodeIds;
+    const node = await nodesRepo.createNode({
       projectId: activeProjectId,
       type: suggestion.type,
       title: suggestion.title,
       description: suggestion.description ?? '',
       icon: suggestion.icon ?? null,
       source: 'orb',
-      initialState: 'available',
+      initialState: prerequisiteIds.length > 0 ? 'locked' : 'available',
     });
+    if (prerequisiteIds.length > 0) {
+      await edgesRepo.setPrerequisites(activeProjectId, node.id, prerequisiteIds);
+    }
     router.back();
   };
 
@@ -106,7 +113,7 @@ export default function QuestAssistScreen() {
         onPress={handleSuggest}
         disabled={loading}
         style={[styles.button, { backgroundColor: tint, opacity: loading ? 0.6 : 1 }]}>
-        <ThemedText style={styles.buttonLabel}>{loading ? 'Denkt nach…' : 'Nächsten Schritt vorschlagen'}</ThemedText>
+        <ThemedText style={[styles.buttonLabel, { color: tintText }]}>{loading ? 'Denkt nach…' : 'Nächsten Schritt vorschlagen'}</ThemedText>
       </Pressable>
 
       {error ? <ThemedText style={styles.error}>{error}</ThemedText> : null}
@@ -114,7 +121,11 @@ export default function QuestAssistScreen() {
       {suggestion ? (
         <View style={[styles.suggestionCard, { borderColor }]}>
           <View style={styles.suggestionHeader}>
-            <IconSymbol name={(suggestion.icon as never) ?? 'sparkles'} size={20} color={tint} />
+            {suggestion.icon ? (
+              <SkillIcon id={suggestion.icon} size={28} />
+            ) : (
+              <IconSymbol name="sparkles" size={20} color={tint} />
+            )}
             <ThemedText type="defaultSemiBold" style={styles.suggestionTitle}>
               {suggestion.title}
             </ThemedText>
@@ -123,7 +134,7 @@ export default function QuestAssistScreen() {
             <ThemedText style={styles.suggestionDescription}>{suggestion.description}</ThemedText>
           ) : null}
           <Pressable onPress={handleAccept} style={[styles.acceptButton, { backgroundColor: tint }]}>
-            <ThemedText style={styles.buttonLabel}>Als nächsten Schritt übernehmen</ThemedText>
+            <ThemedText style={[styles.buttonLabel, { color: tintText }]}>Als nächsten Schritt übernehmen</ThemedText>
           </Pressable>
         </View>
       ) : null}
@@ -152,7 +163,7 @@ const styles = StyleSheet.create({
     borderCurve: 'continuous',
     alignItems: 'center',
   },
-  buttonLabel: { color: '#fff', fontWeight: '600', fontSize: 16 },
+  buttonLabel: { fontWeight: '600', fontSize: 16 },
   error: { color: '#E5484D', marginTop: 12 },
   suggestionCard: {
     marginTop: 20,

@@ -1,4 +1,3 @@
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Pressable, StyleSheet } from 'react-native';
 import { router } from 'expo-router';
 import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
@@ -6,13 +5,9 @@ import { BlurView } from 'expo-blur';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 
 const ORB_SIZE = 56;
-const TAB_BAR_HEIGHT = 49;
 
+/** Positioning is the caller's job (see app/(tabs)/tree.tsx) — this only renders the button itself. */
 export function FloatingOrb() {
-  const insets = useSafeAreaInsets();
-
-  const bottom = insets.bottom + TAB_BAR_HEIGHT + 16;
-
   const handlePress = () => {
     router.push('/quest-assist');
   };
@@ -25,14 +20,14 @@ export function FloatingOrb() {
 
   if (isLiquidGlassAvailable()) {
     return (
-      <GlassView isInteractive style={[styles.orb, { bottom, right: 20 }]}>
+      <GlassView isInteractive style={styles.orb}>
         {content}
       </GlassView>
     );
   }
 
   return (
-    <BlurView tint="systemMaterial" intensity={90} style={[styles.orb, { bottom, right: 20 }]}>
+    <BlurView tint="systemMaterial" intensity={90} style={styles.orb}>
       {content}
     </BlurView>
   );
@@ -40,7 +35,6 @@ export function FloatingOrb() {
 
 const styles = StyleSheet.create({
   orb: {
-    position: 'absolute',
     width: ORB_SIZE,
     height: ORB_SIZE,
     borderRadius: ORB_SIZE / 2,

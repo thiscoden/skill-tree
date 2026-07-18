@@ -31,6 +31,7 @@ export function NodeForm({ candidatePrerequisites, submitLabel, onSubmit }: Node
 
   const textColor = useThemeColor({}, 'text');
   const tint = useThemeColor({}, 'tint');
+  const tintText = useThemeColor({}, 'tintText');
   const borderColor = useThemeColor({ light: '#E0E0E0', dark: '#333' }, 'text');
 
   const canSubmit = title.trim().length > 0 && !submitting;
@@ -120,7 +121,7 @@ export function NodeForm({ candidatePrerequisites, submitLabel, onSubmit }: Node
         onPress={handleSubmit}
         disabled={!canSubmit}
         style={[styles.button, { backgroundColor: tint, opacity: canSubmit ? 1 : 0.5 }]}>
-        <ThemedText style={styles.buttonLabel}>{submitLabel}</ThemedText>
+        <ThemedText style={[styles.buttonLabel, { color: tintText }]}>{submitLabel}</ThemedText>
       </Pressable>
     </ScrollView>
   );
@@ -157,5 +158,5 @@ const styles = StyleSheet.create({
     borderCurve: 'continuous',
     alignItems: 'center',
   },
-  buttonLabel: { color: '#fff', fontWeight: '600', fontSize: 16 },
+  buttonLabel: { fontWeight: '600', fontSize: 16 },
 });
