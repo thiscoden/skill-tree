@@ -1,4 +1,11 @@
-import { computeUnlocks, recomputeAllStates, directChildren, type UnlockNode, type UnlockEdge } from './unlock';
+import {
+  computeUnlocks,
+  recomputeAllStates,
+  directChildren,
+  reduceRedundantPrerequisites,
+  type UnlockNode,
+  type UnlockEdge,
+} from './unlock';
 
 describe('computeUnlocks', () => {
   it('unlocks a candidate with a single satisfied prerequisite', () => {
@@ -57,6 +64,22 @@ describe('computeUnlocks', () => {
     const edges: UnlockEdge[] = [{ sourceNodeId: 'a', targetNodeId: 'b' }];
 
     expect(computeUnlocks(nodes, edges, ['b'])).toEqual([]);
+  });
+});
+
+describe('reduceRedundantPrerequisites', () => {
+  it('drops a selected ancestor that another selected node already implies transitively', () => {
+    // tier1 <- tier2 <- tier3 (tier3 already requires tier1 through the chain).
+    const edges: UnlockEdge[] = [
+      { sourceNodeId: 'tier1', targetNodeId: 'tier2' },
+      { sourceNodeId: 'tier2', targetNodeId: 'tier3' },
+    ];
+    expect(reduceRedundantPrerequisites(['tier3', 'tier1'], edges).sort()).toEqual(['tier3']);
+  });
+
+  it('keeps unrelated selections that do not imply each other', () => {
+    const edges: UnlockEdge[] = [{ sourceNodeId: 'tier1', targetNodeId: 'tier2' }];
+    expect(reduceRedundantPrerequisites(['tier2', 'other'], edges).sort()).toEqual(['other', 'tier2']);
   });
 });
 

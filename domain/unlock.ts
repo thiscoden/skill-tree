@@ -42,6 +42,31 @@ export function directChildren(edges: UnlockEdge[], sourceNodeId: string): strin
   return Array.from(new Set(edges.filter((e) => e.sourceNodeId === sourceNodeId).map((e) => e.targetNodeId)));
 }
 
+function transitiveAncestorsOf(id: string, prereqsByTarget: Map<string, string[]>): Set<string> {
+  const ancestors = new Set<string>();
+  const stack = [...(prereqsByTarget.get(id) ?? [])];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    if (ancestors.has(current)) continue;
+    ancestors.add(current);
+    stack.push(...(prereqsByTarget.get(current) ?? []));
+  }
+  return ancestors;
+}
+
+/**
+ * Transitive reduction over a set of about-to-be-selected prerequisites: drops any selected
+ * id that's already a transitive ancestor of another selected id, since requiring it directly
+ * adds no constraint that wasn't already implied by the chain. `edges` is the existing project
+ * graph (the new node being created isn't part of it yet).
+ */
+export function reduceRedundantPrerequisites(selectedIds: string[], edges: UnlockEdge[]): string[] {
+  const prereqsByTarget = groupPrereqsByTarget(edges);
+  return selectedIds.filter(
+    (id) => !selectedIds.some((other) => other !== id && transitiveAncestorsOf(other, prereqsByTarget).has(id))
+  );
+}
+
 /**
  * Full-graph re-evaluation. Reserved for the rare un-master/undo path — everywhere
  * else state is incrementally recomputed via computeUnlocks() on just the direct

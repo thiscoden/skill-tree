@@ -6,6 +6,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { SkillIcon } from '@/components/icons/skill-icon';
 import { IconPickerModal } from '@/components/icons/icon-picker-modal';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import { reduceRedundantPrerequisites, type UnlockEdge } from '@/domain/unlock';
 import type { SkillNode } from '@/db/types';
 
 export interface NodeFormValues {
@@ -17,11 +18,15 @@ export interface NodeFormValues {
 
 interface NodeFormProps {
   candidatePrerequisites: SkillNode[];
+  /** The project's existing prerequisite edges — used to auto-drop a selection that's already
+      implied transitively by another one (e.g. picking a tier-3 node makes its tier-1 ancestor
+      redundant to also pick directly). */
+  existingEdges?: UnlockEdge[];
   submitLabel: string;
   onSubmit: (values: NodeFormValues) => void | Promise<void>;
 }
 
-export function NodeForm({ candidatePrerequisites, submitLabel, onSubmit }: NodeFormProps) {
+export function NodeForm({ candidatePrerequisites, existingEdges = [], submitLabel, onSubmit }: NodeFormProps) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [icon, setIcon] = useState<string | null>(null);
@@ -37,7 +42,10 @@ export function NodeForm({ candidatePrerequisites, submitLabel, onSubmit }: Node
   const canSubmit = title.trim().length > 0 && !submitting;
 
   const toggle = (id: string) => {
-    setPrerequisiteIds((prev) => (prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]));
+    setPrerequisiteIds((prev) => {
+      const next = prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id];
+      return reduceRedundantPrerequisites(next, existingEdges);
+    });
   };
 
   const handleSubmit = async () => {

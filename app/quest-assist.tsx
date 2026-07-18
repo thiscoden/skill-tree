@@ -11,6 +11,7 @@ import { getQuestGiverProvider } from '@/providers/quest-giver';
 import * as projectsRepo from '@/db/repositories/projects-repo';
 import * as nodesRepo from '@/db/repositories/nodes-repo';
 import * as edgesRepo from '@/db/repositories/edges-repo';
+import { reduceRedundantPrerequisites, type UnlockEdge } from '@/domain/unlock';
 import type { QuestGiverSuggestion } from '@/providers/quest-giver/types';
 
 export default function QuestAssistScreen() {
@@ -18,6 +19,7 @@ export default function QuestAssistScreen() {
   const [goalDescription, setGoalDescription] = useState('');
   const [strugglingNote, setStrugglingNote] = useState('');
   const [suggestion, setSuggestion] = useState<QuestGiverSuggestion | null>(null);
+  const [existingEdges, setExistingEdges] = useState<UnlockEdge[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,7 +43,11 @@ export default function QuestAssistScreen() {
     setError(null);
     setSuggestion(null);
     try {
-      const existingNodes = await nodesRepo.listNodesByProject(activeProjectId);
+      const [existingNodes, edges] = await Promise.all([
+        nodesRepo.listNodesByProject(activeProjectId),
+        edgesRepo.listEdgesByProject(activeProjectId),
+      ]);
+      setExistingEdges(edges);
       const provider = getQuestGiverProvider();
       const result = await provider.suggestNextStep({
         projectGoal: goalDescription,
@@ -58,7 +64,7 @@ export default function QuestAssistScreen() {
 
   const handleAccept = async () => {
     if (!activeProjectId || !suggestion) return;
-    const prerequisiteIds = suggestion.prerequisiteNodeIds;
+    const prerequisiteIds = reduceRedundantPrerequisites(suggestion.prerequisiteNodeIds, existingEdges);
     const node = await nodesRepo.createNode({
       projectId: activeProjectId,
       type: suggestion.type,
