@@ -28,7 +28,7 @@ export class MockQuestGiverProvider implements QuestGiverProvider {
     await delay(400);
 
     const existing = new Set(input.existingNodes.map((n) => n.title.toLowerCase()));
-    const goal = input.projectGoal.trim() || 'dein Ziel';
+    const goal = input.projectTitle.trim() || 'dein Projekt';
     // No real reasoning offline — naively chain onto whatever step was added most recently.
     const lastExisting = input.existingNodes[input.existingNodes.length - 1];
     const prerequisiteNodeIds = lastExisting ? [lastExisting.id] : [];
@@ -41,7 +41,6 @@ export class MockQuestGiverProvider implements QuestGiverProvider {
           icon: template.icon,
           type: template.type,
           prerequisiteNodeIds,
-          description: input.strugglingNote ? `Baby-Step, weil: ${input.strugglingNote}` : undefined,
         };
       }
     }

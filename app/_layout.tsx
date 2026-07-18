@@ -29,7 +29,7 @@ export default function RootLayout() {
                 <Stack.Screen name="project/new" options={{ presentation: 'modal', title: 'Neues Projekt' }} />
                 <Stack.Screen name="project/[id]/edit" options={{ presentation: 'modal', title: 'Projekt bearbeiten' }} />
                 <Stack.Screen name="node/new" options={{ presentation: 'modal', title: 'Neuer Knoten' }} />
-                <Stack.Screen name="node/[id]" options={{ presentation: 'modal', title: 'Knoten' }} />
+                <Stack.Screen name="node/[id]/edit" options={{ presentation: 'modal', title: 'Knoten bearbeiten' }} />
                 <Stack.Screen
                   name="quest-assist"
                   options={{

@@ -28,11 +28,9 @@ interface NodeGlyphProps {
   state: NodeState;
   onPress: () => void;
   onLongPress?: () => void;
-  /** Static placeholder rank badge (e.g. "1/1") — not yet backed by real point tracking. */
-  badge?: string;
 }
 
-export function NodeGlyph({ title, icon, state, onPress, onLongPress, badge = '1/1' }: NodeGlyphProps) {
+export function NodeGlyph({ title, icon, state, onPress, onLongPress }: NodeGlyphProps) {
   const color = STATE_BORDER[state];
   const pulse = useSharedValue(0);
 
@@ -73,11 +71,7 @@ export function NodeGlyph({ title, icon, state, onPress, onLongPress, badge = '1
 
   return (
     <View style={styles.wrapper}>
-      <Pressable
-        onPress={onPress}
-        onLongPress={onLongPress}
-        disabled={state === 'locked'}
-        style={styles.shapeContainer}>
+      <Pressable onPress={onPress} onLongPress={onLongPress} style={styles.shapeContainer}>
         {state === 'mastered' && (
           <Animated.View style={[styles.glow, glowStyle]} pointerEvents="none">
             <View style={[styles.glowSquare, { backgroundColor: SkillTreeColors.node.mastered.glow }]} />
@@ -102,12 +96,6 @@ export function NodeGlyph({ title, icon, state, onPress, onLongPress, badge = '1
             </View>
           ) : null}
         </Animated.View>
-
-        {state !== 'locked' && badge ? (
-          <View style={styles.badge} pointerEvents="none">
-            <ThemedText style={styles.badgeText}>{badge}</ThemedText>
-          </View>
-        ) : null}
       </Pressable>
       <ThemedText numberOfLines={2} style={styles.label}>
         {title}
@@ -162,27 +150,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderCurve: 'continuous',
     overflow: 'hidden',
-  },
-  badge: {
-    position: 'absolute',
-    right: -6,
-    bottom: -6,
-    minWidth: 18,
-    paddingHorizontal: 3,
-    height: 14,
-    borderRadius: 4,
-    borderCurve: 'continuous',
-    borderWidth: 1,
-    borderColor: SkillTreeColors.badge.border,
-    backgroundColor: SkillTreeColors.badge.background,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  badgeText: {
-    fontSize: 9,
-    lineHeight: 10,
-    fontWeight: '700',
-    color: SkillTreeColors.badge.text,
   },
   label: { fontSize: 11, textAlign: 'center' },
 });

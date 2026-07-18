@@ -42,9 +42,9 @@ export default function ProjectsScreen() {
     ]);
   };
 
-  const handleArchiveToggle = async (project: Project) => {
-    await projectsRepo.setProjectArchived(project.id, !project.archivedAt);
-    reload();
+  const handleSelect = (project: Project) => {
+    setActiveProjectId(project.id);
+    router.push('/(tabs)/tree');
   };
 
   return (
@@ -68,10 +68,8 @@ export default function ProjectsScreen() {
           renderItem={({ item }) => (
             <ProjectListItem
               project={item}
-              isActive={item.id === activeProjectId}
-              onSelect={() => setActiveProjectId(item.id)}
+              onSelect={() => handleSelect(item)}
               onEdit={() => router.push(`/project/${item.id}/edit`)}
-              onArchiveToggle={() => handleArchiveToggle(item)}
               onDelete={() => handleDelete(item)}
             />
           )}

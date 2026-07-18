@@ -3,6 +3,7 @@ import {
   recomputeAllStates,
   directChildren,
   reduceRedundantPrerequisites,
+  transitiveDescendantsOf,
   type UnlockNode,
   type UnlockEdge,
 } from './unlock';
@@ -80,6 +81,20 @@ describe('reduceRedundantPrerequisites', () => {
   it('keeps unrelated selections that do not imply each other', () => {
     const edges: UnlockEdge[] = [{ sourceNodeId: 'tier1', targetNodeId: 'tier2' }];
     expect(reduceRedundantPrerequisites(['tier2', 'other'], edges).sort()).toEqual(['other', 'tier2']);
+  });
+});
+
+describe('transitiveDescendantsOf', () => {
+  it('finds every downstream node across multiple levels', () => {
+    // a -> b -> d, a -> c -> d (diamond); descendants of a are everything else.
+    const edges: UnlockEdge[] = [
+      { sourceNodeId: 'a', targetNodeId: 'b' },
+      { sourceNodeId: 'a', targetNodeId: 'c' },
+      { sourceNodeId: 'b', targetNodeId: 'd' },
+      { sourceNodeId: 'c', targetNodeId: 'd' },
+    ];
+    expect(Array.from(transitiveDescendantsOf('a', edges)).sort()).toEqual(['b', 'c', 'd']);
+    expect(Array.from(transitiveDescendantsOf('d', edges))).toEqual([]);
   });
 });
 

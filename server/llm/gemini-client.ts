@@ -64,9 +64,9 @@ export class GeminiClient implements LlmClient {
     const iconCatalog = buildIconCatalog();
 
     const promptText = [
-      `Ziel des Nutzers: ${prompt.projectGoal}`,
-      prompt.strugglingNote ? `Aktueller Stolperstein: ${prompt.strugglingNote}` : null,
+      `Projekttitel: ${prompt.projectTitle}`,
       `Bereits vorhandene Schritte (id: Titel):\n${existingStepsText}`,
+      'Schließe aus Projekttitel und den bereits vorhandenen Schritten, was inhaltlich als Nächstes sinnvoll ist — es gibt keine weitere Nutzereingabe.',
       'Schlage GENAU EINEN nicht-prokrastinierbaren, konkreten nächsten Baby-Step vor (max. 2 Minuten Einstiegsaufwand).',
       '"title" ist nur ein kurzer Name (1 bis maximal 3 Wörter, z.B. "Uni recherchieren" oder "Formular ausfüllen") — die ausführliche Erklärung kommt ins "description"-Feld, nicht in den Titel.',
       'Setze "prerequisiteNodeIds" auf die ids der bereits vorhandenen Schritte, die zwingend VOR diesem neuen Schritt abgeschlossen sein müssen. Leeres Array, falls keiner passt oder keine Schritte vorhanden sind.',

@@ -13,8 +13,7 @@ export interface LlmStructuredStep {
 }
 
 export interface LlmPrompt {
-  projectGoal: string;
-  strugglingNote?: string;
+  projectTitle: string;
   existingNodes: LlmExistingNode[];
 }
 

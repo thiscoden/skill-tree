@@ -69,7 +69,7 @@ export default function TreeScreen() {
             nodes={nodes}
             edges={edges}
             onNodePress={handleToggleMastery}
-            onNodeLongPress={(id) => router.push(`/node/${id}`)}
+            onNodeLongPress={(id) => router.push(`/node/${id}/edit`)}
           />
         </View>
       )}

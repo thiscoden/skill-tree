@@ -63,16 +63,6 @@ export async function updateProject(
   ]);
 }
 
-export async function setProjectArchived(id: string, archived: boolean): Promise<void> {
-  const db = await getDb();
-  const now = new Date().toISOString();
-  await db.runAsync('UPDATE projects SET archived_at = ?, updated_at = ? WHERE id = ?;', [
-    archived ? now : null,
-    now,
-    id,
-  ]);
-}
-
 export async function deleteProject(id: string): Promise<void> {
   const db = await getDb();
   await db.runAsync('DELETE FROM projects WHERE id = ?;', [id]);

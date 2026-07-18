@@ -67,6 +67,33 @@ export function reduceRedundantPrerequisites(selectedIds: string[], edges: Unloc
   );
 }
 
+function groupChildrenBySource(edges: UnlockEdge[]): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const e of edges) {
+    if (!map.has(e.sourceNodeId)) map.set(e.sourceNodeId, []);
+    map.get(e.sourceNodeId)!.push(e.targetNodeId);
+  }
+  return map;
+}
+
+/**
+ * All nodes transitively unlocked by (dependent on) `id`. Picking one of these as a
+ * prerequisite of `id` would create a cycle — callers building an edit-time candidate
+ * prerequisite list must exclude them (along with `id` itself).
+ */
+export function transitiveDescendantsOf(id: string, edges: UnlockEdge[]): Set<string> {
+  const childrenBySource = groupChildrenBySource(edges);
+  const descendants = new Set<string>();
+  const stack = [...(childrenBySource.get(id) ?? [])];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    if (descendants.has(current)) continue;
+    descendants.add(current);
+    stack.push(...(childrenBySource.get(current) ?? []));
+  }
+  return descendants;
+}
+
 /**
  * Full-graph re-evaluation. Reserved for the rare un-master/undo path — everywhere
  * else state is incrementally recomputed via computeUnlocks() on just the direct

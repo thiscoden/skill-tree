@@ -59,3 +59,30 @@ export async function markUnmastered(projectId: string, nodeId: string): Promise
     }
   }
 }
+
+/**
+ * Re-evaluates every node's state from the DB's current mastered set — for the rare edit-time
+ * path where a node's own prerequisites changed. Cascades exactly like markUnmastered, including
+ * demoting an already-mastered node whose (edited) prerequisites are no longer all satisfied.
+ */
+export async function reevaluateProjectGraph(projectId: string): Promise<void> {
+  const [allNodes, allEdges] = await Promise.all([
+    nodesRepo.listNodesByProject(projectId),
+    edgesRepo.listEdgesByProject(projectId),
+  ]);
+
+  const masteredIds = new Set(allNodes.filter((n) => n.state === 'mastered').map((n) => n.id));
+
+  const recomputed = recomputeAllStates(
+    allNodes.map((n) => n.id),
+    allEdges.map((e) => ({ sourceNodeId: e.sourceNodeId, targetNodeId: e.targetNodeId })),
+    masteredIds
+  );
+
+  for (const node of allNodes) {
+    const nextState = recomputed.get(node.id);
+    if (nextState && nextState !== node.state) {
+      await nodesRepo.setNodeState(node.id, nextState);
+    }
+  }
+}

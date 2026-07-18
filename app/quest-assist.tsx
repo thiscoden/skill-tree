@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 
 import { ThemedText } from '@/components/themed-text';
@@ -12,12 +12,12 @@ import * as projectsRepo from '@/db/repositories/projects-repo';
 import * as nodesRepo from '@/db/repositories/nodes-repo';
 import * as edgesRepo from '@/db/repositories/edges-repo';
 import { reduceRedundantPrerequisites, type UnlockEdge } from '@/domain/unlock';
+import { filterMeaningfulTitles } from '@/domain/title-quality';
 import type { QuestGiverSuggestion } from '@/providers/quest-giver/types';
 
 export default function QuestAssistScreen() {
   const [activeProjectId] = useActiveProjectId();
-  const [goalDescription, setGoalDescription] = useState('');
-  const [strugglingNote, setStrugglingNote] = useState('');
+  const [projectTitle, setProjectTitle] = useState('');
   const [suggestion, setSuggestion] = useState<QuestGiverSuggestion | null>(null);
   const [existingEdges, setExistingEdges] = useState<UnlockEdge[]>([]);
   const [loading, setLoading] = useState(false);
@@ -25,14 +25,13 @@ export default function QuestAssistScreen() {
 
   const tint = useThemeColor({}, 'tint');
   const tintText = useThemeColor({}, 'tintText');
-  const textColor = useThemeColor({}, 'text');
   const borderColor = useThemeColor({ light: '#E0E0E0', dark: '#333' }, 'text');
   const background = useThemeColor({}, 'background');
 
   useEffect(() => {
     if (activeProjectId) {
       projectsRepo.getProject(activeProjectId).then((p) => {
-        if (p) setGoalDescription(p.goalDescription);
+        if (p) setProjectTitle(p.name);
       });
     }
   }, [activeProjectId]);
@@ -43,16 +42,18 @@ export default function QuestAssistScreen() {
     setError(null);
     setSuggestion(null);
     try {
-      const [existingNodes, edges] = await Promise.all([
+      const [allNodes, edges] = await Promise.all([
         nodesRepo.listNodesByProject(activeProjectId),
         edgesRepo.listEdgesByProject(activeProjectId),
       ]);
       setExistingEdges(edges);
+      // Garbage titles (e.g. "2, 4, a, b, c") would only confuse the model's reasoning about
+      // what's already done — keep only ones that read as an actual word.
+      const meaningfulNodes = filterMeaningfulTitles(allNodes);
       const provider = getQuestGiverProvider();
       const result = await provider.suggestNextStep({
-        projectGoal: goalDescription,
-        strugglingNote: strugglingNote.trim() || undefined,
-        existingNodes: existingNodes.map((n) => ({ id: n.id, title: n.title })),
+        projectTitle,
+        existingNodes: meaningfulNodes.map((n) => ({ id: n.id, title: n.title })),
       });
       setSuggestion(result);
     } catch {
@@ -96,24 +97,10 @@ export default function QuestAssistScreen() {
           KI-Orb
         </ThemedText>
       </View>
-      <ThemedText style={styles.question}>Was ist dein großes Ziel und wobei brauchst du Hilfe?</ThemedText>
-
-      <TextInput
-        value={goalDescription}
-        onChangeText={setGoalDescription}
-        placeholder="Dein Ziel"
-        placeholderTextColor="#888"
-        style={[styles.input, { color: textColor, borderColor }]}
-      />
-      <TextInput
-        value={strugglingNote}
-        onChangeText={setStrugglingNote}
-        placeholder="Wobei hakt's gerade? (optional)"
-        placeholderTextColor="#888"
-        multiline
-        numberOfLines={3}
-        style={[styles.input, styles.multiline, { color: textColor, borderColor }]}
-      />
+      <ThemedText style={styles.question}>
+        Schlägt den nächsten Schritt für <ThemedText type="defaultSemiBold">{projectTitle}</ThemedText> vor — auf
+        Basis des Projekttitels und deiner bisherigen Schritte.
+      </ThemedText>
 
       <Pressable
         onPress={handleSuggest}
@@ -153,15 +140,6 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
   headerTitle: { fontSize: 22 },
   question: { opacity: 0.8, marginBottom: 12 },
-  input: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 12,
-    borderCurve: 'continuous',
-    padding: 12,
-    fontSize: 16,
-    marginBottom: 10,
-  },
-  multiline: { minHeight: 70, textAlignVertical: 'top' },
   button: {
     marginTop: 8,
     paddingVertical: 14,

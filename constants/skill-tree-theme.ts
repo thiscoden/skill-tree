@@ -27,10 +27,4 @@ export const SkillTreeColors = {
       glow: 'rgba(250, 204, 21, 0.55)',
     },
   },
-
-  badge: {
-    background: '#0F0818',
-    text: '#FFFFFF',
-    border: '#3A2E4D',
-  },
 } as const;

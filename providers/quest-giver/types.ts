@@ -13,8 +13,9 @@ export interface QuestGiverSuggestion {
 }
 
 export interface QuestGiverInput {
-  projectGoal: string;
-  strugglingNote?: string;
+  /** The project's own name — the only project-level context the Orb gets. */
+  projectTitle: string;
+  /** Already filtered to meaningful titles (see domain/title-quality.ts) before this is built. */
   existingNodes: QuestGiverExistingNode[];
 }
 

@@ -3,8 +3,7 @@ import { getLlmClient } from '@/server/llm';
 // This endpoint proxies to a paid, external LLM API with no user accounts to gate
 // on (local-first app, auth is a future milestone) — these caps and the rate limiter
 // below are the only things standing between it and an open cost-abuse vector.
-const MAX_GOAL_LENGTH = 500;
-const MAX_NOTE_LENGTH = 500;
+const MAX_PROJECT_TITLE_LENGTH = 200;
 const MAX_EXISTING_NODES = 50;
 const MAX_TITLE_LENGTH = 200;
 const MAX_ID_LENGTH = 100;
@@ -33,9 +32,8 @@ export async function POST(request: Request) {
 
   const body = await request.json();
 
-  const projectGoal = typeof body.projectGoal === 'string' ? body.projectGoal.slice(0, MAX_GOAL_LENGTH) : '';
-  const strugglingNote =
-    typeof body.strugglingNote === 'string' ? body.strugglingNote.slice(0, MAX_NOTE_LENGTH) : undefined;
+  const projectTitle =
+    typeof body.projectTitle === 'string' ? body.projectTitle.slice(0, MAX_PROJECT_TITLE_LENGTH) : '';
   const existingNodes = Array.isArray(body.existingNodes)
     ? body.existingNodes
         .filter((n: unknown): n is { id: unknown; title: unknown } => typeof n === 'object' && n !== null)
@@ -47,13 +45,13 @@ export async function POST(request: Request) {
         .slice(0, MAX_EXISTING_NODES)
     : [];
 
-  if (!projectGoal) {
-    return Response.json({ error: 'projectGoal is required' }, { status: 400 });
+  if (!projectTitle) {
+    return Response.json({ error: 'projectTitle is required' }, { status: 400 });
   }
 
   try {
     const llm = getLlmClient();
-    const step = await llm.generateStructuredStep({ projectGoal, strugglingNote, existingNodes });
+    const step = await llm.generateStructuredStep({ projectTitle, existingNodes });
     return Response.json(step);
   } catch (error) {
     console.error('quest-giver endpoint failed', error);

@@ -7,29 +7,17 @@ import type { Project } from '@/db/types';
 
 interface ProjectListItemProps {
   project: Project;
-  isActive: boolean;
   onSelect: () => void;
   onEdit: () => void;
-  onArchiveToggle: () => void;
   onDelete: () => void;
 }
 
-export function ProjectListItem({
-  project,
-  isActive,
-  onSelect,
-  onEdit,
-  onArchiveToggle,
-  onDelete,
-}: ProjectListItemProps) {
-  const tint = useThemeColor({}, 'tint');
+export function ProjectListItem({ project, onSelect, onEdit, onDelete }: ProjectListItemProps) {
   const icon = useThemeColor({}, 'icon');
   const borderColor = useThemeColor({ light: '#E0E0E0', dark: '#2A2A2A' }, 'text');
 
   return (
-    <Pressable
-      onPress={onSelect}
-      style={[styles.row, { borderColor }, isActive && { borderColor: tint, borderWidth: 2 }]}>
+    <Pressable onPress={onSelect} style={[styles.row, { borderColor }]}>
       <View style={styles.info}>
         <ThemedText type="defaultSemiBold" numberOfLines={1}>
           {project.name}
@@ -41,12 +29,8 @@ export function ProjectListItem({
         ) : null}
       </View>
       <View style={styles.actions}>
-        {isActive ? <IconSymbol name="checkmark.circle.fill" size={20} color={tint} /> : null}
         <Pressable onPress={onEdit} hitSlop={8}>
           <IconSymbol name="pencil" size={20} color={icon} />
-        </Pressable>
-        <Pressable onPress={onArchiveToggle} hitSlop={8}>
-          <IconSymbol name={project.archivedAt ? 'arrow.uturn.backward' : 'archivebox.fill'} size={20} color={icon} />
         </Pressable>
         <Pressable onPress={onDelete} hitSlop={8}>
           <IconSymbol name="trash" size={20} color="#E5484D" />

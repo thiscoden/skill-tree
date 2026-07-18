@@ -22,16 +22,27 @@ interface NodeFormProps {
       implied transitively by another one (e.g. picking a tier-3 node makes its tier-1 ancestor
       redundant to also pick directly). */
   existingEdges?: UnlockEdge[];
+  /** Pre-fills the form for editing an existing node; omit for the create flow. */
+  initialValues?: NodeFormValues;
   submitLabel: string;
   onSubmit: (values: NodeFormValues) => void | Promise<void>;
+  /** Shows a plain red "Löschen" text button below submit; omit for the create flow. */
+  onDelete?: () => void;
 }
 
-export function NodeForm({ candidatePrerequisites, existingEdges = [], submitLabel, onSubmit }: NodeFormProps) {
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [icon, setIcon] = useState<string | null>(null);
+export function NodeForm({
+  candidatePrerequisites,
+  existingEdges = [],
+  initialValues,
+  submitLabel,
+  onSubmit,
+  onDelete,
+}: NodeFormProps) {
+  const [title, setTitle] = useState(initialValues?.title ?? '');
+  const [description, setDescription] = useState(initialValues?.description ?? '');
+  const [icon, setIcon] = useState<string | null>(initialValues?.icon ?? null);
   const [pickerVisible, setPickerVisible] = useState(false);
-  const [prerequisiteIds, setPrerequisiteIds] = useState<string[]>([]);
+  const [prerequisiteIds, setPrerequisiteIds] = useState<string[]>(initialValues?.prerequisiteIds ?? []);
   const [submitting, setSubmitting] = useState(false);
 
   const textColor = useThemeColor({}, 'text');
@@ -131,6 +142,12 @@ export function NodeForm({ candidatePrerequisites, existingEdges = [], submitLab
         style={[styles.button, { backgroundColor: tint, opacity: canSubmit ? 1 : 0.5 }]}>
         <ThemedText style={[styles.buttonLabel, { color: tintText }]}>{submitLabel}</ThemedText>
       </Pressable>
+
+      {onDelete ? (
+        <Pressable onPress={onDelete} style={styles.deleteButton}>
+          <ThemedText style={styles.deleteLabel}>Löschen</ThemedText>
+        </Pressable>
+      ) : null}
     </ScrollView>
   );
 }
@@ -167,4 +184,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   buttonLabel: { fontWeight: '600', fontSize: 16 },
+  deleteButton: { marginTop: 12, alignItems: 'center', paddingVertical: 10 },
+  deleteLabel: { color: '#E5484D' },
 });
