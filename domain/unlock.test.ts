@@ -90,4 +90,22 @@ describe('recomputeAllStates', () => {
     const result = recomputeAllStates(['a'], [], new Set());
     expect(result.get('a')).toBe('available');
   });
+
+  it('cascades through a dependent that is still flagged mastered in the input set', () => {
+    // Skill 4 requires 1, 2, 3 (chained a -> b -> c -> d). All four are currently mastered.
+    const edges: UnlockEdge[] = [
+      { sourceNodeId: 'a', targetNodeId: 'b' },
+      { sourceNodeId: 'b', targetNodeId: 'c' },
+      { sourceNodeId: 'c', targetNodeId: 'd' },
+    ];
+    // Un-mastering 'c': the caller still reports 'a', 'b', and 'd' as mastered in the DB —
+    // 'd' being in masteredIds must not be trusted blindly, since its prerequisite 'c' isn't.
+    const masteredIds = new Set(['a', 'b', 'd']);
+    const result = recomputeAllStates(['a', 'b', 'c', 'd'], edges, masteredIds);
+
+    expect(result.get('a')).toBe('mastered');
+    expect(result.get('b')).toBe('mastered');
+    expect(result.get('c')).toBe('available');
+    expect(result.get('d')).toBe('locked');
+  });
 });

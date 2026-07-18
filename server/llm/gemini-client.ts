@@ -5,6 +5,7 @@ const VALID_ICON_IDS = new Set(SKILL_ICONS.map((icon) => icon.id));
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const VALID_TYPES = new Set(['task']);
+const MAX_TITLE_WORDS = 3;
 
 function shuffled<T>(items: T[]): T[] {
   const copy = [...items];
@@ -32,7 +33,11 @@ function buildResponseSchema(iconIds: string[], existingNodeIds: string[]) {
   return {
     type: 'OBJECT',
     properties: {
-      title: { type: 'STRING' },
+      title: {
+        type: 'STRING',
+        description:
+          'Kurzer Name des Schritts: 1 bis maximal 3 Wörter. Kein ganzer Satz, keine Satzzeichen. Die ausführliche Erklärung gehört ins "description"-Feld.',
+      },
       description: { type: 'STRING' },
       icon: { type: 'STRING', enum: iconIds },
       type: { type: 'STRING', enum: ['task'] },
@@ -63,6 +68,7 @@ export class GeminiClient implements LlmClient {
       prompt.strugglingNote ? `Aktueller Stolperstein: ${prompt.strugglingNote}` : null,
       `Bereits vorhandene Schritte (id: Titel):\n${existingStepsText}`,
       'Schlage GENAU EINEN nicht-prokrastinierbaren, konkreten nächsten Baby-Step vor (max. 2 Minuten Einstiegsaufwand).',
+      '"title" ist nur ein kurzer Name (1 bis maximal 3 Wörter, z.B. "Uni recherchieren" oder "Formular ausfüllen") — die ausführliche Erklärung kommt ins "description"-Feld, nicht in den Titel.',
       'Setze "prerequisiteNodeIds" auf die ids der bereits vorhandenen Schritte, die zwingend VOR diesem neuen Schritt abgeschlossen sein müssen. Leeres Array, falls keiner passt oder keine Schritte vorhanden sind.',
       `Wähle für "icon" die id aus der folgenden Liste, deren Stichwörter am besten zum Titel dieses konkreten Schritts passen (id=Label (Stichwörter)):\n${iconCatalog.text}`,
       'Variiere die Icon-Wahl je nach Thema des Schritts — nicht wiederholt dieselbe id verwenden, nur weil sie vorher gepasst hat.',
@@ -116,7 +122,11 @@ export class GeminiClient implements LlmClient {
       ? parsed.prerequisiteNodeIds.filter((id): id is string => typeof id === 'string' && existingIdSet.has(id))
       : [];
     const icon = typeof parsed.icon === 'string' && VALID_ICON_IDS.has(parsed.icon) ? parsed.icon : undefined;
+    // Schema description asks for 1-3 words, but free text is never schema-enforced —
+    // clamp defensively so a rambling title never reaches the tree UI.
+    const titleWords = parsed.title.trim().split(/\s+/);
+    const title = titleWords.slice(0, MAX_TITLE_WORDS).join(' ');
 
-    return { ...parsed, icon, prerequisiteNodeIds };
+    return { ...parsed, title, icon, prerequisiteNodeIds };
   }
 }

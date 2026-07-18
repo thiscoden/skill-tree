@@ -84,6 +84,11 @@ export function NodeGlyph({ title, icon, state, onPress, onLongPress, badge = '1
           </Animated.View>
         )}
 
+        {/* Opaque and never animated — pulseStyle's opacity must never make the connector
+            line behind this node bleed through, so the actual occlusion lives here, not on
+            the animated shape below. */}
+        <View style={[styles.taskBacking, { backgroundColor: SkillTreeColors.node.background }]} pointerEvents="none" />
+
         <Animated.View style={[styles.shapeAnimated, pulseStyle]}>
           <View
             style={[
@@ -125,6 +130,13 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     borderWidth: 3,
+    borderRadius: 14,
+    borderCurve: 'continuous',
+  },
+  taskBacking: {
+    position: 'absolute',
+    width: SIZE,
+    height: SIZE,
     borderRadius: 14,
     borderCurve: 'continuous',
   },

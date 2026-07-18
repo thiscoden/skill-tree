@@ -53,10 +53,27 @@ export function recomputeAllStates(
   masteredIds: Set<string>
 ): Map<string, NodeState> {
   const prereqsByTarget = groupPrereqsByTarget(edges);
-  const result = new Map<string, NodeState>();
 
+  // A node only counts as still mastered if every one of its prerequisites is still mastered
+  // too — un-mastering one node must cascade through anything that depended on it, however
+  // deep the chain. `nodeIds` isn't topologically sorted, so iterate to a fixed point.
+  const stillMastered = new Set(masteredIds);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const id of nodeIds) {
+      if (!stillMastered.has(id)) continue;
+      const prereqs = prereqsByTarget.get(id) ?? [];
+      if (prereqs.length > 0 && !prereqs.every((p) => stillMastered.has(p))) {
+        stillMastered.delete(id);
+        changed = true;
+      }
+    }
+  }
+
+  const result = new Map<string, NodeState>();
   for (const id of nodeIds) {
-    if (masteredIds.has(id)) {
+    if (stillMastered.has(id)) {
       result.set(id, 'mastered');
       continue;
     }
@@ -65,7 +82,7 @@ export function recomputeAllStates(
       result.set(id, 'available');
       continue;
     }
-    const allMastered = prereqs.every((p) => masteredIds.has(p));
+    const allMastered = prereqs.every((p) => stillMastered.has(p));
     result.set(id, allMastered ? 'available' : 'locked');
   }
   return result;
