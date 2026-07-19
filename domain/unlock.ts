@@ -42,7 +42,12 @@ export function directChildren(edges: UnlockEdge[], sourceNodeId: string): strin
   return Array.from(new Set(edges.filter((e) => e.sourceNodeId === sourceNodeId).map((e) => e.targetNodeId)));
 }
 
-function transitiveAncestorsOf(id: string, prereqsByTarget: Map<string, string[]>): Set<string> {
+/**
+ * All nodes transitively required by (prerequisites of) `id` — the mirror image of
+ * `transitiveDescendantsOf`. Picking one of these as a *dependent* of `id` would create a cycle.
+ */
+export function transitiveAncestorsOf(id: string, edges: UnlockEdge[]): Set<string> {
+  const prereqsByTarget = groupPrereqsByTarget(edges);
   const ancestors = new Set<string>();
   const stack = [...(prereqsByTarget.get(id) ?? [])];
   while (stack.length > 0) {
@@ -61,9 +66,8 @@ function transitiveAncestorsOf(id: string, prereqsByTarget: Map<string, string[]
  * graph (the new node being created isn't part of it yet).
  */
 export function reduceRedundantPrerequisites(selectedIds: string[], edges: UnlockEdge[]): string[] {
-  const prereqsByTarget = groupPrereqsByTarget(edges);
   return selectedIds.filter(
-    (id) => !selectedIds.some((other) => other !== id && transitiveAncestorsOf(other, prereqsByTarget).has(id))
+    (id) => !selectedIds.some((other) => other !== id && transitiveAncestorsOf(other, edges).has(id))
   );
 }
 
@@ -92,6 +96,34 @@ export function transitiveDescendantsOf(id: string, edges: UnlockEdge[]): Set<st
     stack.push(...(childrenBySource.get(current) ?? []));
   }
   return descendants;
+}
+
+/**
+ * A node's tier: 0 if it has no prerequisites, else 1 + max(prerequisite depths) — same
+ * definition `layout.ts` uses for rendering. Any ancestor of `id` always has a strictly smaller
+ * depth than `id` (depth increases by at least 1 along every prerequisite edge), so filtering
+ * candidates by `depth(candidate) > depth(id)` also rules out cycles for free.
+ */
+export function computeDepths(nodeIds: string[], edges: UnlockEdge[]): Map<string, number> {
+  const prereqsByTarget = groupPrereqsByTarget(edges);
+  const depths = new Map<string, number>();
+
+  function depthOf(id: string, visiting: Set<string>): number {
+    const cached = depths.get(id);
+    if (cached !== undefined) return cached;
+    if (visiting.has(id)) return 0; // cycle guard; acyclicity is enforced at write time
+
+    visiting.add(id);
+    const prereqs = prereqsByTarget.get(id) ?? [];
+    const depth = prereqs.length === 0 ? 0 : 1 + Math.max(...prereqs.map((p) => depthOf(p, visiting)));
+    visiting.delete(id);
+
+    depths.set(id, depth);
+    return depth;
+  }
+
+  for (const id of nodeIds) depthOf(id, new Set());
+  return depths;
 }
 
 /**

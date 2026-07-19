@@ -1,4 +1,4 @@
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, View } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback } from 'react';
 
@@ -11,7 +11,6 @@ import { TreeCanvas } from '@/components/skill-tree/tree-canvas';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { useActiveProjectId } from '@/hooks/use-active-project-id';
 import { useSkillTreeViewModel } from '@/viewmodel/skill-tree-viewmodel';
-import { markMastered, markUnmastered } from '@/domain/mastery';
 import { SkillTreeColors } from '@/constants/skill-tree-theme';
 
 export default function TreeScreen() {
@@ -25,17 +24,21 @@ export default function TreeScreen() {
     }, [reload])
   );
 
-  const handleToggleMastery = async (id: string) => {
-    if (!activeProjectId) return;
+  const handleNodeLongPress = (id: string) => {
     const node = nodes.find((n) => n.id === id);
     if (!node) return;
 
-    if (node.state === 'mastered') {
-      await markUnmastered(activeProjectId, id);
-    } else if (node.state === 'available') {
-      await markMastered(id);
-    }
-    reload();
+    Alert.alert('Neuen Skill anlegen', `Wo soll er relativ zu "${node.title}" stehen?`, [
+      { text: 'Abbrechen', style: 'cancel' },
+      {
+        text: 'Danach einfügen',
+        onPress: () => router.push({ pathname: '/node/new', params: { anchorNodeId: id, insertMode: 'after' } }),
+      },
+      {
+        text: 'Davor einfügen',
+        onPress: () => router.push({ pathname: '/node/new', params: { anchorNodeId: id, insertMode: 'before' } }),
+      },
+    ]);
   };
 
   if (!activeProjectId) {
@@ -70,7 +73,7 @@ export default function TreeScreen() {
             nodes={nodes}
             edges={edges}
             onNodePress={(id) => router.push(`/node/${id}/edit`)}
-            onNodeLongPress={handleToggleMastery}
+            onNodeLongPress={handleNodeLongPress}
           />
         </View>
       )}
