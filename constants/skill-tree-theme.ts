@@ -5,6 +5,10 @@
  */
 export const SkillTreeColors = {
   background: '#1A1025',
+  /** Node title label — fixed, not theme-following: the canvas background never changes with
+   * light/dark mode, so text tied to the app theme's text color can end up near-invisible
+   * (e.g. light-mode's near-black text on this near-black purple). */
+  label: '#F3EDFB',
 
   edge: {
     inactive: '#4B5563',

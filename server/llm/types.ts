@@ -17,7 +17,31 @@ export interface LlmPrompt {
   existingNodes: LlmExistingNode[];
 }
 
+export interface LlmTreePrompt {
+  projectTitle: string;
+  goalDescription: string;
+}
+
+export interface LlmGeneratedNode {
+  /** Scoped to this response only — never a real DB id. Used to resolve edges below. */
+  id: string;
+  title: string;
+  description?: string;
+  icon?: string;
+}
+
+export interface LlmGeneratedEdge {
+  from: string;
+  to: string;
+}
+
+export interface LlmGeneratedTree {
+  nodes: LlmGeneratedNode[];
+  edges: LlmGeneratedEdge[];
+}
+
 /** Backend-internal vendor abstraction — the app client never sees this. */
 export interface LlmClient {
   generateStructuredStep(prompt: LlmPrompt): Promise<LlmStructuredStep>;
+  generateSkillTree(prompt: LlmTreePrompt): Promise<LlmGeneratedTree>;
 }

@@ -1,12 +1,13 @@
 import * as projectsRepo from './repositories/projects-repo';
 import * as nodesRepo from './repositories/nodes-repo';
 import * as edgesRepo from './repositories/edges-repo';
-import type { NodeType } from './types';
+import type { NodeType, NodeSource } from './types';
 
 interface ImportNode {
   id: string;
   type: NodeType;
   title: string;
+  description?: string;
   icon?: string;
   tier?: number;
 }
@@ -45,8 +46,13 @@ function assertAcyclic(nodes: ImportNode[], edges: ImportEdge[]): void {
   for (const n of nodes) visit(n.id);
 }
 
-/** Internal dev/fixture bulk import — not the user-facing creation flow. See fixtures/. */
-export async function importSkillTree(payload: ImportPayload): Promise<string> {
+/**
+ * Bulk import: validates the graph, creates the project, then all nodes and edges.
+ * Used both by internal dev/fixture imports (see fixtures/) and by the LLM one-shot
+ * tree-generation flow — `source` tags which one so generated nodes stay distinguishable.
+ */
+export async function importSkillTree(payload: ImportPayload, options?: { source?: NodeSource }): Promise<string> {
+  const source = options?.source ?? 'manual';
   if (!SUPPORTED_SCHEMA_VERSIONS.includes(payload.schema_version)) {
     throw new Error(`Unsupported schema_version "${payload.schema_version}"`);
   }
@@ -78,9 +84,10 @@ export async function importSkillTree(payload: ImportPayload): Promise<string> {
       projectId: project.id,
       type: n.type,
       title: n.title,
+      description: n.description,
       icon: n.icon ?? null,
       tier: n.tier ?? null,
-      source: 'manual',
+      source,
       initialState: hasPrereqs ? 'locked' : 'available',
     });
     idMap.set(n.id, created.id);

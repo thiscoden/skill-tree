@@ -6,7 +6,8 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { TreeCanvas } from '@/components/skill-tree/tree-canvas';
-import { FloatingOrb } from '@/components/orb/floating-orb';
+// KI-Orb deaktiviert bis auf Weiteres — Ersatz: One-Shot Tree-Generierung bei Projekterstellung
+// import { FloatingOrb } from '@/components/orb/floating-orb';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { useActiveProjectId } from '@/hooks/use-active-project-id';
 import { useSkillTreeViewModel } from '@/viewmodel/skill-tree-viewmodel';
@@ -74,9 +75,11 @@ export default function TreeScreen() {
         </View>
       )}
 
+      {/* KI-Orb deaktiviert bis auf Weiteres — Ersatz: One-Shot Tree-Generierung bei Projekterstellung
       <View pointerEvents="box-none" style={styles.orbLayer}>
         <FloatingOrb />
       </View>
+      */}
     </ThemedView>
   );
 }

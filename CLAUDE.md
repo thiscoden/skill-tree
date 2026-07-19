@@ -13,8 +13,14 @@ legacy called out in the migration note below.
 Skill Tree — Expo/React Native (SDK 54) app that turns a goal into a dependency-gated tree of
 tasks. Nodes start `locked`/`available` and flip to `mastered`; mastering a node re-evaluates its
 direct children and unlocks the ones whose prerequisites are now all satisfied. Local-first: all
-state lives in on-device SQLite (`expo-sqlite`), no user accounts yet. An optional "KI-Orb" (AI
-orb) calls an LLM via a server-side proxy to suggest the next concrete step.
+state lives in on-device SQLite (`expo-sqlite`), no user accounts yet.
+
+Creating a project (`app/project/new.tsx`) with a meaningful title + goal description triggers a
+one-shot LLM call (`providers/tree-generator/`) that generates a full skill tree, persisted via
+`db/import-skill-tree.ts`. The older "KI-Orb" (AI orb, `providers/quest-giver/`) that suggested one
+next step at a time is **disabled bis auf Weiteres** — its entry points are commented out in
+`app/(tabs)/tree.tsx` and `app/_layout.tsx`, code otherwise left intact and reachable again by
+uncommenting those two spots.
 
 ## Commands
 
@@ -47,19 +53,25 @@ Screens never write raw SQL; they call repositories or domain functions. Do not 
   `components/skill-tree/tree-canvas.tsx` never touches the db directly. `layout.ts` computes tiers
   by prerequisite depth at render time, not the stored `tier` column.
 
-### Gemini backend proxy (KI-Orb)
+### Gemini backend proxy (tree-generator, formerly KI-Orb)
 
-Three-layer indirection — no LLM vendor name leaks past the server boundary:
+Three-layer indirection — no LLM vendor name leaks past the server boundary. Same pattern used by
+both the active tree-generator and the disabled quest-giver (KI-Orb):
 
-1. **`providers/quest-giver/`** — app-side contract. `index.ts` is the one swap point: picks
-   `MockQuestGiverProvider` (offline default) or `BackendQuestGiverProvider` based on
-   `EXPO_PUBLIC_QUEST_GIVER_BACKEND_URL`. Never call a concrete provider from a screen directly.
-2. **`app/api/quest-giver+api.ts`** — server-only Expo Router API route. Vendor-neutral body,
-   string length caps, in-memory per-process rate limit (no auth yet, so this is the only
-   cost-abuse guard — read the comments before touching limits).
-3. **`server/llm/`** — server-only vendor abstraction (`LlmClient`/`GeminiClient`).
-   `LLM_PROVIDER`/`LLM_API_KEY`/`LLM_ENDPOINT` from env. `LLM_API_KEY` stays server-only (never
-   `EXPO_PUBLIC_` prefix), sent as a header, never a query string.
+1. **`providers/tree-generator/`** — app-side contract for the one-shot full-tree generation.
+   `index.ts` is the one swap point: picks `MockTreeGeneratorProvider` (offline default) or
+   `BackendTreeGeneratorProvider` based on `EXPO_PUBLIC_LLM_BACKEND_URL`. Never call a concrete
+   provider from a screen directly. `providers/quest-giver/` is the same pattern for the disabled
+   single-step KI-Orb — dead code, left intact, shares the same env var.
+2. **`app/api/generate-tree+api.ts`** (active) / **`app/api/quest-giver+api.ts`** (dead code) —
+   server-only Expo Router API routes. Vendor-neutral body, string length caps, in-memory
+   per-process rate limit (no auth yet, so this is the only cost-abuse guard — read the comments
+   before touching limits).
+3. **`server/llm/`** — server-only vendor abstraction (`LlmClient`/`GeminiClient`,
+   `generateSkillTree`/`generateStructuredStep`). `LLM_PROVIDER`/`LLM_API_KEY`/`LLM_ENDPOINT` from
+   env. `LLM_API_KEY` stays server-only (never `EXPO_PUBLIC_` prefix), sent as a header, never a
+   query string. The system prompt used by `generateSkillTree` is currently a marked placeholder
+   (`TODO(user)` in `gemini-client.ts`) — the real prompt is still pending, not yet supplied.
 
 Preserve the vendor-neutral contract at each boundary — swapping the LLM vendor must stay confined
 to `server/llm/`.
@@ -76,8 +88,9 @@ circle/passive-bonus variant, in the DB schema, the LLM contracts, or the render
   - `locked` — grey/matte, muted opacity, no animation.
   - `available` — full color, pulsing (Reanimated `withRepeat`/`withSequence`).
   - `mastered` — gold border with a glow effect (Reanimated), no pulse decay.
-- KI-Orb button uses the Liquid Glass effect (`expo-glass-effect`, `GlassView` /
-  `isLiquidGlassAvailable()`, falling back to `BlurView`) and Apple SF Symbols via `IconSymbol`.
+- KI-Orb button (`components/orb/floating-orb.tsx`) uses the Liquid Glass effect
+  (`expo-glass-effect`, `GlassView` / `isLiquidGlassAvailable()`, falling back to `BlurView`) and
+  Apple SF Symbols via `IconSymbol` — currently unreachable, see the tree-generator note above.
 
 ## Rendering technology — DO NOT CHANGE
 
@@ -101,7 +114,8 @@ second one somewhere else.
 ## Env vars
 
 - `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_ENDPOINT` — server-only, read by `server/llm/index.ts`.
-- `EXPO_PUBLIC_QUEST_GIVER_BACKEND_URL` — client-visible; unset keeps the app on the offline mock.
+- `EXPO_PUBLIC_LLM_BACKEND_URL` — client-visible; unset keeps the app on the offline mock provider
+  (used by both `providers/tree-generator/` and, if re-enabled, `providers/quest-giver/`).
 
 ## Conventions
 

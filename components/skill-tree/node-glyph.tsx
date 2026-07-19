@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -8,7 +8,6 @@ import Animated, {
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
-import { ThemedText } from '@/components/themed-text';
 import { SkillIcon } from '@/components/icons/skill-icon';
 import { findSkillIcon } from '@/constants/skill-icons';
 import { SkillTreeColors } from '@/constants/skill-tree-theme';
@@ -97,9 +96,9 @@ export function NodeGlyph({ title, icon, state, onPress, onLongPress }: NodeGlyp
           ) : null}
         </Animated.View>
       </Pressable>
-      <ThemedText numberOfLines={2} style={styles.label}>
+      <Text numberOfLines={2} style={styles.label}>
         {title}
-      </ThemedText>
+      </Text>
     </View>
   );
 }
@@ -151,5 +150,5 @@ const styles = StyleSheet.create({
     borderCurve: 'continuous',
     overflow: 'hidden',
   },
-  label: { fontSize: 11, textAlign: 'center' },
+  label: { fontSize: 13, lineHeight: 16, fontWeight: '600', textAlign: 'center', color: SkillTreeColors.label },
 });

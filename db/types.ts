@@ -1,6 +1,6 @@
 export type NodeType = 'task';
 export type NodeState = 'locked' | 'available' | 'mastered';
-export type NodeSource = 'manual' | 'orb';
+export type NodeSource = 'manual' | 'orb' | 'generated';
 
 export interface Project {
   id: string;

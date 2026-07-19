@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Platform, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import Svg, { Line } from 'react-native-svg';
@@ -21,6 +21,9 @@ const MIN_SCALE = 0.5;
 const MAX_SCALE = 2.5;
 const NODE_HALF_WIDTH = 42;
 const SHAPE_CENTER_OFFSET = 28;
+// Wheel deltaY is typically in the hundreds per notch — this keeps a single scroll tick
+// feeling like a small, controllable zoom step rather than an abrupt jump.
+const WHEEL_ZOOM_SENSITIVITY = 0.001;
 
 const EDGE_COLOR: Record<SkillNode['state'], string> = {
   locked: SkillTreeColors.edge.inactive,
@@ -31,6 +34,13 @@ const EDGE_COLOR: Record<SkillNode['state'], string> = {
 export function TreeCanvas({ nodes, edges, onNodePress, onNodeLongPress }: TreeCanvasProps) {
   const { positions, width, height } = useMemo(() => computeLayout(nodes, edges), [nodes, edges]);
   const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+  // Reloading after an unrelated edit (e.g. saving a node's title) produces a new `nodes` array
+  // with the same members — recompute a signature of *which* nodes exist so the recenter effect
+  // below only reacts to an actual structural change (node added/removed), not every refetch.
+  const nodeIdSignature = useMemo(() => nodes.map((n) => n.id).sort().join(','), [nodes]);
+
+  const containerRef = useRef<View>(null);
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
@@ -38,6 +48,48 @@ export function TreeCanvas({ nodes, edges, onNodePress, onNodeLongPress }: TreeC
   const savedTranslateX = useSharedValue(0);
   const savedTranslateY = useSharedValue(0);
   const savedScale = useSharedValue(1);
+
+  const handleContainerLayout = (e: LayoutChangeEvent) => {
+    const { width: w, height: h } = e.nativeEvent.layout;
+    setContainerSize({ width: w, height: h });
+  };
+
+  // Keep the tree centered on first measurement, on container resize (e.g. desktop window
+  // resize), and when the set of nodes actually changes (switching project, adding/removing a
+  // node) — but NOT on every reload, so editing a node's title/description and saving leaves the
+  // user's manual pan/zoom exactly where it was instead of snapping back to center.
+  useEffect(() => {
+    if (containerSize.width === 0 || containerSize.height === 0) return;
+    const centerX = (containerSize.width - width) / 2;
+    const centerY = (containerSize.height - height) / 2;
+    translateX.value = centerX;
+    translateY.value = centerY;
+    savedTranslateX.value = centerX;
+    savedTranslateY.value = centerY;
+    scale.value = 1;
+    savedScale.value = 1;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- width/height intentionally excluded, see comment above
+  }, [containerSize.width, containerSize.height, nodeIdSignature, translateX, translateY, savedTranslateX, savedTranslateY, scale, savedScale]);
+
+  // Web/desktop: mouse wheel zooms in place of touch pinch — react-native-gesture-handler's
+  // Pan gesture already handles mouse click-drag for panning on web via pointer events, so wheel
+  // only needs to cover zoom.
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const node = containerRef.current as unknown as HTMLElement | null;
+    if (!node) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const next = savedScale.value * (1 - e.deltaY * WHEEL_ZOOM_SENSITIVITY);
+      const clamped = Math.min(MAX_SCALE, Math.max(MIN_SCALE, next));
+      scale.value = clamped;
+      savedScale.value = clamped;
+    };
+
+    node.addEventListener('wheel', handleWheel, { passive: false });
+    return () => node.removeEventListener('wheel', handleWheel);
+  }, [scale, savedScale]);
 
   const panGesture = Gesture.Pan()
     .onUpdate((e) => {
@@ -65,7 +117,7 @@ export function TreeCanvas({ nodes, edges, onNodePress, onNodeLongPress }: TreeC
   }));
 
   return (
-    <View style={styles.container}>
+    <View ref={containerRef} style={styles.container} onLayout={handleContainerLayout}>
       <GestureDetector gesture={composedGesture}>
         <Animated.View style={[{ width, height }, animatedStyle]}>
           <Svg width={width} height={height} style={StyleSheet.absoluteFill}>
