@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
-import Svg, { Line } from 'react-native-svg';
+import Svg, { Polyline } from 'react-native-svg';
 
 import { NodeGlyph } from './node-glyph';
 import { computeLayout } from './layout';
@@ -32,7 +32,7 @@ const EDGE_COLOR: Record<SkillNode['state'], string> = {
 };
 
 export function TreeCanvas({ nodes, edges, onNodePress, onNodeLongPress }: TreeCanvasProps) {
-  const { positions, width, height } = useMemo(() => computeLayout(nodes, edges), [nodes, edges]);
+  const { positions, edgeWaypoints, width, height } = useMemo(() => computeLayout(nodes, edges), [nodes, edges]);
   const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
   // Reloading after an unrelated edit (e.g. saving a node's title) produces a new `nodes` array
   // with the same members — recompute a signature of *which* nodes exist so the recenter effect
@@ -127,16 +127,19 @@ export function TreeCanvas({ nodes, edges, onNodePress, onNodeLongPress }: TreeC
               const targetNode = nodeById.get(edge.targetNodeId);
               if (!from || !to || !targetNode) return null;
               const color = EDGE_COLOR[targetNode.state];
+              const waypoints = edgeWaypoints.get(edge.id) ?? [];
+              const points = [from, ...waypoints, to]
+                .map((p) => `${p.x},${p.y + SHAPE_CENTER_OFFSET}`)
+                .join(' ');
               return (
-                <Line
+                <Polyline
                   key={edge.id}
-                  x1={from.x}
-                  y1={from.y + SHAPE_CENTER_OFFSET}
-                  x2={to.x}
-                  y2={to.y + SHAPE_CENTER_OFFSET}
+                  points={points}
+                  fill="none"
                   stroke={color}
                   strokeWidth={targetNode.state === 'mastered' ? 5 : 2}
                   strokeOpacity={targetNode.state === 'mastered' ? 1 : 0.55}
+                  strokeLinejoin="round"
                 />
               );
             })}
