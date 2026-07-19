@@ -29,7 +29,7 @@ export default function RootLayout() {
                 <Stack.Screen name="project/new" options={{ presentation: 'modal', title: 'Neues Projekt' }} />
                 <Stack.Screen name="project/[id]/edit" options={{ presentation: 'modal', title: 'Projekt bearbeiten' }} />
                 <Stack.Screen name="node/new" options={{ presentation: 'modal', title: 'Neuer Knoten' }} />
-                <Stack.Screen name="node/[id]/edit" options={{ presentation: 'modal', title: 'Knoten bearbeiten' }} />
+                <Stack.Screen name="node/[id]/edit" options={{ presentation: 'modal', title: '' }} />
                 {/* KI-Orb deaktiviert bis auf Weiteres — Ersatz: One-Shot Tree-Generierung bei Projekterstellung
                 <Stack.Screen
                   name="quest-assist"
@@ -45,7 +45,7 @@ export default function RootLayout() {
               </Stack>
             </View>
 
-            <StatusBar style="auto" />
+            <StatusBar hidden />
           </>
         )}
       </ThemeProvider>

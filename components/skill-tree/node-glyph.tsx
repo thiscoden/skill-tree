@@ -25,11 +25,14 @@ interface NodeGlyphProps {
   title: string;
   icon: string | null;
   state: NodeState;
+  /** How wide the title label may render — computed per node from its actual neighbor spacing
+      (see `layout.ts`'s `labelWidths`); falls back to the original fixed column width. */
+  labelWidth?: number;
   onPress: () => void;
   onLongPress?: () => void;
 }
 
-export function NodeGlyph({ title, icon, state, onPress, onLongPress }: NodeGlyphProps) {
+export function NodeGlyph({ title, icon, state, labelWidth = 84, onPress, onLongPress }: NodeGlyphProps) {
   const color = STATE_BORDER[state];
   const pulse = useSharedValue(0);
 
@@ -69,7 +72,7 @@ export function NodeGlyph({ title, icon, state, onPress, onLongPress }: NodeGlyp
   const skillIcon = findSkillIcon(icon);
 
   return (
-    <View style={styles.wrapper}>
+    <View style={[styles.wrapper, { width: labelWidth }]}>
       <Pressable onPress={onPress} onLongPress={onLongPress} style={styles.shapeContainer}>
         {state === 'mastered' && (
           <Animated.View style={[styles.glow, glowStyle]} pointerEvents="none">
@@ -104,7 +107,7 @@ export function NodeGlyph({ title, icon, state, onPress, onLongPress }: NodeGlyp
 }
 
 const styles = StyleSheet.create({
-  wrapper: { width: 84, alignItems: 'center', gap: 4 },
+  wrapper: { alignItems: 'center', gap: 4 },
   shapeContainer: { width: SIZE, height: SIZE, alignItems: 'center', justifyContent: 'center' },
   shapeAnimated: {
     position: 'absolute',

@@ -19,7 +19,7 @@ interface TreeCanvasProps {
 
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 2.5;
-const NODE_HALF_WIDTH = 42;
+const DEFAULT_LABEL_WIDTH = 84;
 const SHAPE_CENTER_OFFSET = 28;
 // Wheel deltaY is typically in the hundreds per notch — this keeps a single scroll tick
 // feeling like a small, controllable zoom step rather than an abrupt jump.
@@ -32,7 +32,10 @@ const EDGE_COLOR: Record<SkillNode['state'], string> = {
 };
 
 export function TreeCanvas({ nodes, edges, onNodePress, onNodeLongPress }: TreeCanvasProps) {
-  const { positions, edgeWaypoints, width, height } = useMemo(() => computeLayout(nodes, edges), [nodes, edges]);
+  const { positions, edgeWaypoints, labelWidths, width, height } = useMemo(
+    () => computeLayout(nodes, edges),
+    [nodes, edges]
+  );
   const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
   // Reloading after an unrelated edit (e.g. saving a node's title) produces a new `nodes` array
   // with the same members — recompute a signature of *which* nodes exist so the recenter effect
@@ -148,14 +151,19 @@ export function TreeCanvas({ nodes, edges, onNodePress, onNodeLongPress }: TreeC
           {nodes.map((node) => {
             const pos = positions.get(node.id);
             if (!pos) return null;
+            const labelWidth = labelWidths.get(node.id) ?? DEFAULT_LABEL_WIDTH;
             return (
               <View
                 key={node.id}
-                style={[styles.nodeWrapper, { left: pos.x - NODE_HALF_WIDTH, top: pos.y - SHAPE_CENTER_OFFSET }]}>
+                style={[
+                  styles.nodeWrapper,
+                  { left: pos.x - labelWidth / 2, top: pos.y - SHAPE_CENTER_OFFSET, width: labelWidth },
+                ]}>
                 <NodeGlyph
                   title={node.title}
                   icon={node.icon}
                   state={node.state}
+                  labelWidth={labelWidth}
                   onPress={() => onNodePress(node.id)}
                   onLongPress={() => onNodeLongPress(node.id)}
                 />
@@ -170,5 +178,5 @@ export function TreeCanvas({ nodes, edges, onNodePress, onNodeLongPress }: TreeC
 
 const styles = StyleSheet.create({
   container: { flex: 1, overflow: 'hidden', backgroundColor: SkillTreeColors.background },
-  nodeWrapper: { position: 'absolute', width: 84, alignItems: 'center' },
+  nodeWrapper: { position: 'absolute', alignItems: 'center' },
 });

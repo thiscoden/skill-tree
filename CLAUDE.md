@@ -70,8 +70,8 @@ both the active tree-generator and the disabled quest-giver (KI-Orb):
 3. **`server/llm/`** — server-only vendor abstraction (`LlmClient`/`GeminiClient`,
    `generateSkillTree`/`generateStructuredStep`). `LLM_PROVIDER`/`LLM_API_KEY`/`LLM_ENDPOINT` from
    env. `LLM_API_KEY` stays server-only (never `EXPO_PUBLIC_` prefix), sent as a header, never a
-   query string. The system prompt used by `generateSkillTree` is currently a marked placeholder
-   (`TODO(user)` in `gemini-client.ts`) — the real prompt is still pending, not yet supplied.
+   query string. The system prompt used by `generateSkillTree` is supplied and de-gamified —
+   Baby-Step/cognitive-load decomposition, no RPG/quest/XP framing (`gemini-client.ts`).
 
 Preserve the vendor-neutral contract at each boundary — swapping the LLM vendor must stay confined
 to `server/llm/`.

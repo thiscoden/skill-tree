@@ -266,6 +266,32 @@ describe('computeLayout', () => {
     expect(countCrossings(edges, result.positions, result.edgeWaypoints)).toBe(0);
   });
 
+  it('gives an isolated node with no same-tier neighbor the maximum label width', () => {
+    const nodes = [makeNode('a', '2024-01-01T00:00:00Z')];
+    const result = computeLayout(nodes, []);
+
+    expect(result.labelWidths.get('a')).toBe(320);
+  });
+
+  it('caps label width to the default column when siblings sit at minimum spacing', () => {
+    // b and c are the only two nodes in tier1, exactly NODE_SPACING (100) apart — mirrors the
+    // fixed 84px column every node used to get, so dense trees look unchanged.
+    const nodes = ['a', 'b', 'c', 'd'].map((id, i) => makeNode(id, `2024-01-0${i + 1}T00:00:00Z`));
+    const edges = [
+      makeEdge('e1', 'a', 'b'),
+      makeEdge('e2', 'a', 'c'),
+      makeEdge('e3', 'b', 'd'),
+      makeEdge('e4', 'c', 'd'),
+    ];
+    const result = computeLayout(nodes, edges);
+
+    expect(result.labelWidths.get('b')).toBe(84);
+    expect(result.labelWidths.get('c')).toBe(84);
+    // a and d are the lone occupants of their own tier — free to use the max width.
+    expect(result.labelWidths.get('a')).toBe(320);
+    expect(result.labelWidths.get('d')).toBe(320);
+  });
+
   it('untangles a barycenter tie via the transpose pass', () => {
     // Middle tier has one node (m1) requiring two outer-column roots (p0, p2) and a sibling
     // (m2) requiring only the middle root (p1) — a classic barycenter tie (both score the same

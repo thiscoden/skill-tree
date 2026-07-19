@@ -77,7 +77,11 @@ function buildTreeResponseSchema(iconIds: string[]) {
               type: 'STRING',
               description: 'Kurze, eindeutige id innerhalb dieser Antwort (z.B. "n1"). Keine echte Datenbank-id.',
             },
-            title: { type: 'STRING' },
+            title: {
+              type: 'STRING',
+              description:
+                'Kurzer, eindeutiger Name: maximal 3 Wörter, kein ganzer Satz, keine Satzzeichen. Erscheint unter einer kleinen Icon-Kachel im Skill-Tree und wird bei Überlänge abgeschnitten — muss also für sich allein, ohne die "description" zu öffnen, klar verständlich sein.',
+            },
             description: { type: 'STRING' },
             icon: { type: 'STRING', enum: iconIds },
           },
@@ -183,15 +187,14 @@ export class GeminiClient implements LlmClient {
   async generateSkillTree(prompt: LlmTreePrompt): Promise<LlmGeneratedTree> {
     const iconCatalog = buildIconCatalog();
 
-    // Persona/Task/Decomposition-Rules are the user's system prompt, verbatim. Only "Rules for
-    // Output Format" and "JSON Schema Requirement" are adapted to this app's actual data model:
-    // a single node type ("task"), no stored XP/tier/quest-type fields, flat nodes+edges instead
-    // of nested tiers[].nodes[]. Tier/XP/quest-type thinking is redirected into
-    // "thinking_process", into title/description wording, and into the edges graph shape.
+    // Persona/Task/Decomposition-Rules are the user's system prompt, adapted to drop RPG/gamification
+    // framing (see CLAUDE.md "Project scope & design" — this app has a single plain "task" node type,
+    // no XP/tier/quest fields). Only "Rules for Output Format" and "JSON Schema Requirement" are
+    // further adapted to the actual data model: flat nodes+edges instead of nested tiers[].nodes[].
     const systemPrompt = [
-      'You are an expert Game Designer, Behavioral Psychologist, and Productivity Architect. Your sole',
-      'objective is to cure human procrastination by transforming overwhelmingly large real-world goals',
-      '(provided by the user) into a gamified "Skill Tree" inspired by RPGs like World of Warcraft.',
+      'You are an expert Behavioral Psychologist and Productivity Architect. Your sole objective is to',
+      'cure human procrastination by transforming overwhelmingly large real-world goals (provided by',
+      'the user) into a clear, ordered "Skill Tree" of concrete, actionable steps.',
       '',
       'Your core philosophy is the "Baby Step" methodology: Procrastination is not a time-management',
       'issue; it is caused by cognitive overload, emotional dysregulation, and action paralysis. To',
@@ -206,20 +209,17 @@ export class GeminiClient implements LlmClient {
       '    SEQUENTIAL THINKING: First, analyze the cognitive load of the goal and break it down',
       '    logically step-by-step. Identify the psychological friction points.',
       '    DECONSTRUCTION: Translate this analysis into a Directed Acyclic Graph (DAG) representing a',
-      '    "Skill Tree" with Tiers and Nodes (baby steps).',
+      '    "Skill Tree" with ordered steps (nodes).',
       '',
       'Rules for Goal Decomposition:',
-      '    EXTREME MICRO-STEPPING: The steps in Tier 1 MUST be incredibly trivial (e.g., "Stand up",',
+      '    EXTREME MICRO-STEPPING: The first steps MUST be incredibly trivial (e.g., "Stand up",',
       '    "Open a new tab", "Pick up one piece of paper"). They must take less than 2 minutes to',
       '    complete to build immediate psychological momentum.',
       '    LOGICAL SEQUENCING: Steps must follow a strict chronological and causal order. Step B cannot',
       '    be completed unless Step A is done.',
-      '    GAMIFICATION: Assign WoW-style RPG elements (e.g., "Quest", "Talent", "Passive Ability").',
-      '    Assign an XP value to each step. Trivial steps grant little XP (e.g., 10 XP), major',
-      '    milestones grant more (e.g., 100 XP).',
       '    BRANCHING PATHS: Create parallel branches where applicable.',
-      '    TIER PROGRESSION: Structure the tree vertically in Tiers (e.g., Tier 1: Novice, Tier 2:',
-      '    Apprentice, Tier 3: Journeyman).',
+      '    STEP PROGRESSION: Structure the tree vertically so steps get more advanced the further down',
+      '    the tree they sit (e.g., step 1 is a trivial starting action, later steps are more involved).',
       '',
       'Rules for Output Format:',
       '    Respond ONLY with a valid, well-formed JSON object matching the schema below (enforced by the',
@@ -229,17 +229,21 @@ export class GeminiClient implements LlmClient {
       '    "thinking_process" may stay in English regardless of the user\'s input language — it is',
       '    internal reasoning, not shown to the end user as-is.',
       '    All "title"/"description" values inside "nodes" MUST match the language used in',
-      '    PROJECT_TITLE/PROJECT_DESCRIPTION.',
+      '    PROJECT_TITLE/PROJECT_DESCRIPTION, and MUST read as plain, direct task language — no RPG',
+      '    jargon (no "Quest", "Talent", "Passive Ability", XP, or similar), no game-master voice.',
+      '    Every node\'s "title" MUST be at most 3 words, no full sentence, no punctuation, and clear',
+      '    and unambiguous entirely on its own — it renders beneath a small icon tile in the tree UI',
+      '    and gets cut off if longer, so the user must grasp the step from the title alone, without',
+      '    opening it.',
       '    For each node\'s "icon", choose the id from the provided icon catalog whose keywords best fit',
       '    that specific step — vary the choice across nodes, don\'t reuse one id repeatedly.',
       '',
       'JSON Schema Requirement:',
-      'This system only supports a single node type (baby-step "task") with no stored XP/tier/quest-type',
-      'fields — channel your Tier-/XP-/Quest-type thinking from the Rules for Goal Decomposition above',
-      'into "thinking_process", into "title"/"description" wording, and into the branching shape of',
-      '"edges" instead of separate output fields. Fill "thinking_process" first, before "nodes"/"edges":',
-      'Step 1 analyze the goal\'s cognitive friction, Step 2 identify the lowest-friction Tier-1 starting',
-      'points, Step 3 map dependencies/branches for later steps.',
+      'This system only supports a single node type ("task") with no stored tier/step-number fields —',
+      'express the step ordering from the Rules for Goal Decomposition above purely through the',
+      '"edges" graph shape, not as separate output fields. Fill "thinking_process" first, before',
+      '"nodes"/"edges": Step 1 analyze the goal\'s cognitive friction, Step 2 identify the',
+      'lowest-friction starting points, Step 3 map dependencies/branches for later steps.',
       '',
       'Every "from"/"to" value in "edges" must match an existing node "id". Do not create circular',
       'dependencies.',
@@ -293,12 +297,18 @@ export class GeminiClient implements LlmClient {
     // has a root) happens downstream in importSkillTree, which already owns that logic.
     const nodes = parsed.nodes
       .filter((n): n is LlmGeneratedTree['nodes'][number] => typeof n?.id === 'string' && typeof n?.title === 'string')
-      .map((n) => ({
-        id: n.id,
-        title: n.title,
-        description: typeof n.description === 'string' ? n.description : undefined,
-        icon: typeof n.icon === 'string' && VALID_ICON_IDS.has(n.icon) ? n.icon : undefined,
-      }));
+      .map((n) => {
+        // Schema description asks for at most 3 words, but free text is never schema-enforced —
+        // clamp defensively so a rambling title never reaches the tree UI (mirrors the same
+        // clamp in generateStructuredStep above).
+        const titleWords = n.title.trim().split(/\s+/);
+        return {
+          id: n.id,
+          title: titleWords.slice(0, MAX_TITLE_WORDS).join(' '),
+          description: typeof n.description === 'string' ? n.description : undefined,
+          icon: typeof n.icon === 'string' && VALID_ICON_IDS.has(n.icon) ? n.icon : undefined,
+        };
+      });
     const edges = parsed.edges.filter(
       (e): e is LlmGeneratedTree['edges'][number] => typeof e?.from === 'string' && typeof e?.to === 'string'
     );

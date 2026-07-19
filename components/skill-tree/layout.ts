@@ -9,6 +9,9 @@ export interface LayoutResult {
   positions: Map<string, LayoutPosition>;
   /** Intermediate bend points for edges whose source/target tiers aren't adjacent, keyed by edge id. */
   edgeWaypoints: Map<string, LayoutPosition[]>;
+  /** Safe label width per node — how wide its title can render without reaching into a
+      neighbor's column, given how much horizontal room that node actually has this layout. */
+  labelWidths: Map<string, number>;
   width: number;
   height: number;
 }
@@ -30,6 +33,14 @@ const TIER_HEIGHT = 140;
 const NODE_SPACING = 100;
 const TOP_PADDING = 80;
 const SIDE_PADDING = 60;
+
+// Same default as the fixed 84px label column this replaces — dense tiers (neighbors exactly
+// NODE_SPACING apart) look identical to before. MAX caps how far an isolated node (or one at
+// the end of a sparse row) can stretch; LABEL_GUTTER is the breathing room kept clear on each
+// side so two neighbors that both max out their width still never touch.
+const MIN_LABEL_WIDTH = 84;
+const MAX_LABEL_WIDTH = 320;
+const LABEL_GUTTER = 16;
 
 const ORDERING_SWEEPS = 2; // barycenter down+up rounds; converges within a handful of sweeps
 const TRANSPOSE_MAX_PASSES = 4; // adjacent-swap crossing reduction; stops early once a pass helps nothing
@@ -320,17 +331,40 @@ export function computeLayout(nodes: SkillNode[], edges: LayoutEdge[]): LayoutRe
   for (const [key, value] of x) x.set(key, value + shift);
   const width = Math.max(SIDE_PADDING * 2 + (maxX - minX), 320);
 
-  const pixelPositions = new Map<string, LayoutPosition>();
-  sortedTierKeys.forEach((tier, rowIndex) => {
-    for (const n of order.get(tier)!) {
-      pixelPositions.set(n.key, { x: x.get(n.key)!, y: TOP_PADDING + rowIndex * TIER_HEIGHT });
+  // A label only has to clear the nearest REAL neighbor in its own row — a dummy waypoint
+  // column has no rendered label of its own, so a title is free to stretch across it.
+  function realNeighborGap(row: LayerColumnNode[], index: number, direction: 1 | -1): number {
+    let i = index + direction;
+    while (i >= 0 && i < row.length) {
+      if (!row[i].isDummy) return Math.abs(x.get(row[i].key)! - x.get(row[index].key)!);
+      i += direction;
     }
+    return Infinity;
+  }
+
+  const pixelPositions = new Map<string, LayoutPosition>();
+  const labelWidthsByKey = new Map<string, number>();
+  sortedTierKeys.forEach((tier, rowIndex) => {
+    const row = order.get(tier)!;
+    row.forEach((n, colIndex) => {
+      pixelPositions.set(n.key, { x: x.get(n.key)!, y: TOP_PADDING + rowIndex * TIER_HEIGHT });
+      if (n.isDummy) return;
+      // Both this node and its neighbor apply the same rule off the same shared gap, so each
+      // capping its width at (gap - GUTTER) still leaves GUTTER of clearance between the two
+      // boxes — no need to also halve it. At exactly the default NODE_SPACING (100) this
+      // resolves to exactly MIN_LABEL_WIDTH (84), matching today's fixed column exactly.
+      const available = Math.min(realNeighborGap(row, colIndex, -1), realNeighborGap(row, colIndex, 1)) - LABEL_GUTTER;
+      labelWidthsByKey.set(n.key, Math.min(MAX_LABEL_WIDTH, Math.max(MIN_LABEL_WIDTH, available)));
+    });
   });
 
   const positions = new Map<string, LayoutPosition>();
+  const labelWidths = new Map<string, number>();
   for (const node of nodes) {
     const p = pixelPositions.get(node.id);
     if (p) positions.set(node.id, p);
+    const w = labelWidthsByKey.get(node.id);
+    if (w !== undefined) labelWidths.set(node.id, w);
   }
 
   const edgeWaypoints = new Map<string, LayoutPosition[]>();
@@ -343,5 +377,5 @@ export function computeLayout(nodes: SkillNode[], edges: LayoutEdge[]): LayoutRe
   }
 
   const height = TOP_PADDING * 2 + sortedTierKeys.length * TIER_HEIGHT;
-  return { positions, edgeWaypoints, width, height: Math.max(height, 320) };
+  return { positions, edgeWaypoints, labelWidths, width, height: Math.max(height, 320) };
 }

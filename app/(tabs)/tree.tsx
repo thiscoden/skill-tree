@@ -69,8 +69,8 @@ export default function TreeScreen() {
           <TreeCanvas
             nodes={nodes}
             edges={edges}
-            onNodePress={handleToggleMastery}
-            onNodeLongPress={(id) => router.push(`/node/${id}/edit`)}
+            onNodePress={(id) => router.push(`/node/${id}/edit`)}
+            onNodeLongPress={handleToggleMastery}
           />
         </View>
       )}

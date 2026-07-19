@@ -45,8 +45,7 @@ export default function NewNodeScreen() {
     <NodeForm
       candidatePrerequisites={existingNodes}
       existingEdges={existingEdges}
-      submitLabel="Knoten anlegen"
-      onSubmit={handleSubmit}
+      primaryAction={{ label: 'Knoten anlegen', onPress: handleSubmit }}
     />
   );
 }
