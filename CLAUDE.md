@@ -76,6 +76,13 @@ both the active tree-generator and the disabled quest-giver (KI-Orb):
 Preserve the vendor-neutral contract at each boundary — swapping the LLM vendor must stay confined
 to `server/llm/`.
 
+### Gemini model selection
+
+Do not hardcode Gemini model names in feature code. Reuse the configured default endpoint from
+`server/llm/index.ts` first. Alternative models are allowed only as env overrides, not new code
+defaults. Do not introduce `gemini-2.5-*` model defaults; these caused 404s for new users. Before
+changing models, search existing `DEFAULT_GEMINI_*` constants and keep `tsc` + tests green.
+
 ## Project scope & design — CURRENT RULES
 
 **Capstones and passive bonuses are cut.** The skill tree has exactly one node shape: **Task**

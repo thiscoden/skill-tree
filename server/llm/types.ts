@@ -17,6 +17,11 @@ export interface LlmPrompt {
   existingNodes: LlmExistingNode[];
 }
 
+export interface LlmAudio {
+  base64: string;
+  mimeType: string;
+}
+
 export interface LlmTreePrompt {
   projectTitle: string;
   goalDescription: string;
@@ -44,4 +49,5 @@ export interface LlmGeneratedTree {
 export interface LlmClient {
   generateStructuredStep(prompt: LlmPrompt): Promise<LlmStructuredStep>;
   generateSkillTree(prompt: LlmTreePrompt): Promise<LlmGeneratedTree>;
+  transcribeAudio(input: { audio: LlmAudio }): Promise<{ text: string }>;
 }

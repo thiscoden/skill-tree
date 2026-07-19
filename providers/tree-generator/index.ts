@@ -16,3 +16,8 @@ export function getTreeGeneratorProvider(): TreeGeneratorProvider {
   }
   return instance;
 }
+
+/** Audio input needs a real LLM to listen to it — the offline mock provider can't use it. */
+export function isBackendConfigured(): boolean {
+  return !!process.env.EXPO_PUBLIC_LLM_BACKEND_URL;
+}

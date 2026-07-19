@@ -1,5 +1,5 @@
 import { SKILL_ICONS } from '@/constants/skill-icons';
-import type { LlmClient, LlmGeneratedTree, LlmPrompt, LlmStructuredStep, LlmTreePrompt } from './types';
+import type { LlmAudio, LlmClient, LlmGeneratedTree, LlmPrompt, LlmStructuredStep, LlmTreePrompt } from './types';
 
 const VALID_ICON_IDS = new Set(SKILL_ICONS.map((icon) => icon.id));
 
@@ -9,6 +9,8 @@ const MAX_TITLE_WORDS = 3;
 
 // A full tree is a much bigger generation than a single step — give it more room to finish.
 const TREE_REQUEST_TIMEOUT_MS = 45_000;
+// Plain "audio in, transcript out" with no tree reasoning — much lighter than tree generation.
+const TRANSCRIBE_TIMEOUT_MS = 20_000;
 
 function shuffled<T>(items: T[]): T[] {
   const copy = [...items];
@@ -108,8 +110,48 @@ function buildTreeResponseSchema(iconIds: string[]) {
 export class GeminiClient implements LlmClient {
   constructor(
     private readonly apiKey: string,
-    private readonly endpoint: string
+    private readonly endpoint: string,
+    private readonly transcribeEndpoint: string
   ) {}
+
+  async transcribeAudio(input: { audio: LlmAudio }): Promise<{ text: string }> {
+    const promptText =
+      'Transcribe the following spoken audio verbatim, in the same language it was spoken in. ' +
+      'Respond with ONLY the transcript text — no commentary, no quotation marks, no markdown.';
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), TRANSCRIBE_TIMEOUT_MS);
+
+    let response: Response;
+    try {
+      response = await fetch(this.transcribeEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: 'user',
+              parts: [{ text: promptText }, { inlineData: { mimeType: input.audio.mimeType, data: input.audio.base64 } }],
+            },
+          ],
+          generationConfig: { temperature: 0 },
+        }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (!response.ok) {
+      throw new Error(`Gemini transcription request failed: ${response.status} ${(await response.text()).slice(0, 200)}`);
+    }
+
+    const data = await response.json();
+    const text: string | undefined = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) throw new Error('Gemini transcription response missing text');
+
+    return { text: text.trim() };
+  }
 
   async generateStructuredStep(prompt: LlmPrompt): Promise<LlmStructuredStep> {
     const existingNodeIds = prompt.existingNodes.map((n) => n.id);

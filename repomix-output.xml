@@ -67,6 +67,7 @@ app/
   api/
     generate-tree+api.ts
     quest-giver+api.ts
+    transcribe-audio+api.ts
   node/
     [id]/
       edit.tsx
@@ -99,6 +100,7 @@ components/
     project-form.tsx
     project-list-item.tsx
   skill-tree/
+    layout.test.ts
     layout.ts
     node-form.tsx
     node-glyph.tsx
@@ -138,6 +140,11 @@ hooks/
   use-database-ready.ts
   use-theme-color.ts
 providers/
+  audio-transcriber/
+    backend-provider.ts
+    index.ts
+    mock-provider.ts
+    types.ts
   quest-giver/
     backend-provider.ts
     index.ts
@@ -196,20 +203,26 @@ This section contains the contents of the repository's files.
 }
 </file>
 
-<file path="app/api/generate-tree+api.ts">
+<file path="app/api/transcribe-audio+api.ts">
 import { getLlmClient } from '@/server/llm';
 
-// Same posture as /api/quest-giver: no user accounts to gate on (local-first app, auth is a
-// future milestone), so these caps and the rate limiter are the only cost-abuse guard. Caps are
-// far more generous here — a full goal description needs real room, unlike a single-step title.
-const MAX_PROJECT_TITLE_LENGTH = 300;
-const MAX_GOAL_DESCRIPTION_LENGTH = 4000;
+// Same posture as /api/generate-tree: no user accounts to gate on, so caps + rate limiter are
+// the only cost-abuse guard.
+// Gemini's inline-audio request cap is 20 MB total; base64 inflates raw bytes by ~4/3, so this
+// leaves comfortable headroom for the JSON envelope and prompt text alongside it.
+const MAX_AUDIO_BASE64_LENGTH = 18_000_000;
+const SUPPORTED_AUDIO_MIME_TYPES = new Set([
+  'audio/wav',
+  'audio/mp3',
+  'audio/aiff',
+  'audio/aac',
+  'audio/ogg',
+  'audio/flac',
+]);
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 10;
-// Single-process, in-memory sliding window. Resets on redeploy/restart and isn't shared across
-// instances — acceptable for a single-instance MVP, not a substitute for a real gateway-level
-// limiter once this is deployed behind multiple instances.
+// Single-process, in-memory sliding window — same caveat as /api/generate-tree's limiter.
 const requestLog = new Map<string, number[]>();
 
 function isRateLimited(key: string): boolean {
@@ -220,7 +233,7 @@ function isRateLimited(key: string): boolean {
   return timestamps.length > RATE_LIMIT_MAX_REQUESTS;
 }
 
-/** Generic, vendor-neutral endpoint. Only this file knows a real LlmClient exists. */
+/** Generic, vendor-neutral endpoint. Only server/llm knows a real LlmClient exists. */
 export async function POST(request: Request) {
   const clientKey = request.headers.get('x-forwarded-for') ?? 'unknown';
   if (isRateLimited(clientKey)) {
@@ -229,136 +242,105 @@ export async function POST(request: Request) {
 
   const body = await request.json();
 
-  const projectTitle =
-    typeof body.projectTitle === 'string' ? body.projectTitle.slice(0, MAX_PROJECT_TITLE_LENGTH) : '';
-  const goalDescription =
-    typeof body.goalDescription === 'string' ? body.goalDescription.slice(0, MAX_GOAL_DESCRIPTION_LENGTH) : '';
+  const mimeType = body.mimeType;
+  const base64 = body.base64;
 
-  if (!projectTitle) {
-    return Response.json({ error: 'projectTitle is required' }, { status: 400 });
+  if (typeof mimeType !== 'string' || !SUPPORTED_AUDIO_MIME_TYPES.has(mimeType)) {
+    return Response.json({ error: 'mimeType is not a supported audio format' }, { status: 400 });
+  }
+  if (typeof base64 !== 'string' || base64.length === 0) {
+    return Response.json({ error: 'base64 is required' }, { status: 400 });
+  }
+  if (base64.length > MAX_AUDIO_BASE64_LENGTH) {
+    return Response.json({ error: 'audio exceeds the maximum allowed size' }, { status: 400 });
   }
 
   try {
     const llm = getLlmClient();
-    const tree = await llm.generateSkillTree({ projectTitle, goalDescription });
-    return Response.json(tree);
+    const { text } = await llm.transcribeAudio({ audio: { base64, mimeType } });
+    return Response.json({ text });
   } catch (error) {
-    console.error('generate-tree endpoint failed', error);
-    return Response.json({ error: 'Failed to generate a skill tree' }, { status: 502 });
+    console.error('transcribe-audio endpoint failed', error);
+    return Response.json({ error: 'Failed to transcribe audio' }, { status: 502 });
   }
 }
 </file>
 
-<file path="providers/tree-generator/backend-provider.ts">
-import type { GeneratedTree, TreeGeneratorInput, TreeGeneratorProvider } from './types';
+<file path="providers/audio-transcriber/backend-provider.ts">
+import type { AudioTranscriberInput, AudioTranscriberProvider, AudioTranscriberResult } from './types';
 
 /** Talks only to our own generic endpoint — never mentions a concrete LLM vendor. */
-export class BackendTreeGeneratorProvider implements TreeGeneratorProvider {
+export class BackendAudioTranscriberProvider implements AudioTranscriberProvider {
   constructor(private readonly baseUrl: string) {}
 
-  async generateTree(input: TreeGeneratorInput): Promise<GeneratedTree> {
-    const response = await fetch(`${this.baseUrl}/api/generate-tree`, {
+  async transcribe(input: AudioTranscriberInput): Promise<AudioTranscriberResult> {
+    const response = await fetch(`${this.baseUrl}/api/transcribe-audio`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
     });
 
     if (!response.ok) {
-      throw new Error(`generate-tree backend request failed: ${response.status}`);
+      throw new Error(`transcribe-audio backend request failed: ${response.status}`);
     }
 
-    return (await response.json()) as GeneratedTree;
+    return (await response.json()) as AudioTranscriberResult;
   }
 }
 </file>
 
-<file path="providers/tree-generator/index.ts">
-import type { TreeGeneratorProvider } from './types';
-import { MockTreeGeneratorProvider } from './mock-provider';
-import { BackendTreeGeneratorProvider } from './backend-provider';
+<file path="providers/audio-transcriber/index.ts">
+import type { AudioTranscriberProvider } from './types';
+import { MockAudioTranscriberProvider } from './mock-provider';
+import { BackendAudioTranscriberProvider } from './backend-provider';
 
-let instance: TreeGeneratorProvider | null = null;
+let instance: AudioTranscriberProvider | null = null;
 
 /**
- * Single swap point. Defaults to the offline mock. Set EXPO_PUBLIC_LLM_BACKEND_URL
- * once /api/generate-tree is actually deployed to switch to the real backend — no
- * other call site changes.
+ * Single swap point, same pattern as providers/tree-generator/index.ts. Defaults to the
+ * (throwing) offline mock. Set EXPO_PUBLIC_LLM_BACKEND_URL to switch to the real backend.
  */
-export function getTreeGeneratorProvider(): TreeGeneratorProvider {
+export function getAudioTranscriberProvider(): AudioTranscriberProvider {
   if (!instance) {
     const backendUrl = process.env.EXPO_PUBLIC_LLM_BACKEND_URL;
-    instance = backendUrl ? new BackendTreeGeneratorProvider(backendUrl) : new MockTreeGeneratorProvider();
+    instance = backendUrl ? new BackendAudioTranscriberProvider(backendUrl) : new MockAudioTranscriberProvider();
   }
   return instance;
 }
 </file>
 
-<file path="providers/tree-generator/mock-provider.ts">
-import type { GeneratedTree, TreeGeneratorInput, TreeGeneratorProvider } from './types';
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+<file path="providers/audio-transcriber/mock-provider.ts">
+import type { AudioTranscriberInput, AudioTranscriberProvider, AudioTranscriberResult } from './types';
 
 /**
- * Deterministic, network-free tree generation — lets the "create project" flow be exercised
- * fully offline without an LLM backend configured. Always produces the same small shape:
- * one root, two parallel steps, one step that needs both finished first.
+ * Transcription always needs a real LLM to listen to the audio — there's no meaningful offline
+ * fallback. The mic control is hidden via isBackendConfigured() whenever this provider would be
+ * selected, so this path shouldn't be reachable in practice; it exists for symmetry with
+ * providers/tree-generator/mock-provider.ts and to fail loudly if that gating is ever bypassed.
  */
-export class MockTreeGeneratorProvider implements TreeGeneratorProvider {
-  async generateTree(input: TreeGeneratorInput): Promise<GeneratedTree> {
-    await delay(600);
-
-    const goal = input.projectTitle.trim() || 'dein Projekt';
-
-    return {
-      nodes: [
-        { id: 'n1', title: 'Ziel klären', description: `Halte in ein bis zwei Sätzen fest, was "${goal}" konkret bedeutet.` },
-        { id: 'n2', title: 'Erste Recherche', description: 'Sammle die wichtigsten Infos, die du für den Einstieg brauchst.' },
-        { id: 'n3', title: 'Plan skizzieren', description: 'Grobe Reihenfolge der nächsten Schritte aufschreiben.' },
-        { id: 'n4', title: 'Ersten Schritt umsetzen', description: 'Den ersten konkreten Schritt aus dem Plan erledigen.' },
-      ],
-      edges: [
-        { from: 'n1', to: 'n2' },
-        { from: 'n1', to: 'n3' },
-        { from: 'n2', to: 'n4' },
-        { from: 'n3', to: 'n4' },
-      ],
-    };
+export class MockAudioTranscriberProvider implements AudioTranscriberProvider {
+  async transcribe(_input: AudioTranscriberInput): Promise<AudioTranscriberResult> {
+    throw new Error('Audio transcription requires a configured LLM backend.');
   }
 }
 </file>
 
-<file path="providers/tree-generator/types.ts">
-export interface TreeGeneratorInput {
-  projectTitle: string;
-  goalDescription: string;
+<file path="providers/audio-transcriber/types.ts">
+export interface AudioTranscriberInput {
+  base64: string;
+  mimeType: string;
 }
 
-export interface GeneratedTreeNode {
-  /** Scoped to this response only — never a real DB id. Used to resolve edges below. */
-  id: string;
-  title: string;
-  description?: string;
-  icon?: string;
-}
-
-export interface GeneratedTreeEdge {
-  from: string;
-  to: string;
-}
-
-export interface GeneratedTree {
-  nodes: GeneratedTreeNode[];
-  edges: GeneratedTreeEdge[];
+export interface AudioTranscriberResult {
+  text: string;
 }
 
 /**
  * App-side contract. Never mentions an LLM vendor — implementations may be a local
  * mock (offline default) or a call to our own generic backend endpoint.
  */
-export interface TreeGeneratorProvider {
-  generateTree(input: TreeGeneratorInput): Promise<GeneratedTree>;
+export interface AudioTranscriberProvider {
+  transcribe(input: AudioTranscriberInput): Promise<AudioTranscriberResult>;
 }
 </file>
 
@@ -2560,112 +2542,56 @@ export default function TabLayout() {
 }
 </file>
 
-<file path="app/node/[id]/edit.tsx">
-import { useCallback, useState } from 'react';
-import { Alert } from 'react-native';
-import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+<file path="app/api/generate-tree+api.ts">
+import { getLlmClient } from '@/server/llm';
 
-import { NodeForm, type NodeFormValues } from '@/components/skill-tree/node-form';
-import { ThemedView } from '@/components/themed-view';
-import * as nodesRepo from '@/db/repositories/nodes-repo';
-import * as edgesRepo from '@/db/repositories/edges-repo';
-import { directChildren, reduceRedundantPrerequisites, transitiveDescendantsOf, type UnlockEdge } from '@/domain/unlock';
-import { reevaluateProjectGraph } from '@/domain/mastery';
-import type { SkillNode } from '@/db/types';
+// Same posture as /api/quest-giver: no user accounts to gate on (local-first app, auth is a
+// future milestone), so these caps and the rate limiter are the only cost-abuse guard. Caps are
+// far more generous here — a full goal description needs real room, unlike a single-step title.
+const MAX_PROJECT_TITLE_LENGTH = 300;
+const MAX_GOAL_DESCRIPTION_LENGTH = 4000;
 
-export default function EditNodeScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
-  const [node, setNode] = useState<SkillNode | null>(null);
-  const [candidateNodes, setCandidateNodes] = useState<SkillNode[]>([]);
-  const [existingEdges, setExistingEdges] = useState<UnlockEdge[]>([]);
-  const [initialPrerequisiteIds, setInitialPrerequisiteIds] = useState<string[]>([]);
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_REQUESTS = 10;
+// Single-process, in-memory sliding window. Resets on redeploy/restart and isn't shared across
+// instances — acceptable for a single-instance MVP, not a substitute for a real gateway-level
+// limiter once this is deployed behind multiple instances.
+const requestLog = new Map<string, number[]>();
 
-  useFocusEffect(
-    useCallback(() => {
-      (async () => {
-        const current = await nodesRepo.getNode(id);
-        if (!current) return;
+function isRateLimited(key: string): boolean {
+  const now = Date.now();
+  const timestamps = (requestLog.get(key) ?? []).filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+  timestamps.push(now);
+  requestLog.set(key, timestamps);
+  return timestamps.length > RATE_LIMIT_MAX_REQUESTS;
+}
 
-        const [allNodes, allEdges] = await Promise.all([
-          nodesRepo.listNodesByProject(current.projectId),
-          edgesRepo.listEdgesByProject(current.projectId),
-        ]);
-        const edges = allEdges.map((e) => ({ sourceNodeId: e.sourceNodeId, targetNodeId: e.targetNodeId }));
+/** Generic, vendor-neutral endpoint. Only this file knows a real LlmClient exists. */
+export async function POST(request: Request) {
+  const clientKey = request.headers.get('x-forwarded-for') ?? 'unknown';
+  if (isRateLimited(clientKey)) {
+    return Response.json({ error: 'Too many requests, slow down.' }, { status: 429 });
+  }
 
-        // Excludes itself and anything downstream of it — picking either as a prerequisite
-        // would create a cycle.
-        const descendants = transitiveDescendantsOf(id, edges);
+  const body = await request.json();
 
-        // `setNode` must be the LAST state update here: it's what flips the `!node` guard
-        // below and mounts <NodeForm>, which only reads `initialValues` once (on mount, via
-        // useState's initializer). Setting it before the other state was ready meant NodeForm
-        // mounted with an empty `initialPrerequisiteIds` — every save then wiped the node's
-        // real prerequisite edges, regardless of what the user actually touched.
-        setExistingEdges(edges);
-        setCandidateNodes(allNodes.filter((n) => n.id !== id && !descendants.has(n.id)));
-        setInitialPrerequisiteIds(allEdges.filter((e) => e.targetNodeId === id).map((e) => e.sourceNodeId));
-        setNode(current);
-      })();
-    }, [id])
-  );
+  const projectTitle =
+    typeof body.projectTitle === 'string' ? body.projectTitle.slice(0, MAX_PROJECT_TITLE_LENGTH) : '';
+  const goalDescription =
+    typeof body.goalDescription === 'string' ? body.goalDescription.slice(0, MAX_GOAL_DESCRIPTION_LENGTH) : '';
 
-  if (!node) return <ThemedView style={{ flex: 1 }} />;
+  if (!projectTitle) {
+    return Response.json({ error: 'projectTitle is required' }, { status: 400 });
+  }
 
-  const handleSubmit = async (values: NodeFormValues) => {
-    await nodesRepo.updateNode(id, {
-      title: values.title,
-      description: values.description,
-      icon: values.icon,
-      type: 'task',
-    });
-
-    const prerequisiteIds = reduceRedundantPrerequisites(values.prerequisiteIds, existingEdges);
-    await edgesRepo.setPrerequisites(node.projectId, id, prerequisiteIds);
-    // A prerequisite edit can invalidate this node's (or a dependent's) mastered status —
-    // recompute the whole project rather than guessing this one node's next state.
-    await reevaluateProjectGraph(node.projectId);
-
-    router.back();
-  };
-
-  const handleDelete = () => {
-    const dependentCount = directChildren(existingEdges, node.id).length;
-    const dependentWarning =
-      dependentCount > 0
-        ? `\n\n${dependentCount} ${dependentCount === 1 ? 'anderer Knoten verliert' : 'andere Knoten verlieren'} diese Voraussetzung.`
-        : '';
-
-    Alert.alert('Knoten löschen', `"${node.title}" unwiderruflich löschen?${dependentWarning}`, [
-      { text: 'Abbrechen', style: 'cancel' },
-      {
-        text: 'Löschen',
-        style: 'destructive',
-        onPress: async () => {
-          await nodesRepo.deleteNode(node.id);
-          // The deleted node may have been a dependent's last unmet prerequisite —
-          // recompute rather than leave it stuck on its old locked/available state.
-          await reevaluateProjectGraph(node.projectId);
-          router.back();
-        },
-      },
-    ]);
-  };
-
-  return (
-    <NodeForm
-      candidatePrerequisites={candidateNodes}
-      existingEdges={existingEdges}
-      initialValues={{
-        title: node.title,
-        description: node.description,
-        icon: node.icon,
-        prerequisiteIds: initialPrerequisiteIds,
-      }}
-      submitLabel="Speichern"
-      onSubmit={handleSubmit}
-      onDelete={handleDelete}
-    />
-  );
+  try {
+    const llm = getLlmClient();
+    const tree = await llm.generateSkillTree({ projectTitle, goalDescription });
+    return Response.json(tree);
+  } catch (error) {
+    console.error('generate-tree endpoint failed', error);
+    return Response.json({ error: 'Failed to generate a skill tree' }, { status: 502 });
+  }
 }
 </file>
 
@@ -2701,114 +2627,6 @@ export default function EditProjectScreen() {
     />
   );
 }
-</file>
-
-<file path="app/project/new.tsx">
-import { useState } from 'react';
-import { Pressable, StyleSheet } from 'react-native';
-import { router } from 'expo-router';
-
-import { ProjectForm, type ProjectFormValues } from '@/components/projects/project-form';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { useThemeColor } from '@/hooks/use-theme-color';
-import { useActiveProjectId } from '@/hooks/use-active-project-id';
-import * as projectsRepo from '@/db/repositories/projects-repo';
-import { importSkillTree } from '@/db/import-skill-tree';
-import { getTreeGeneratorProvider } from '@/providers/tree-generator';
-import { isMeaningfulTitle } from '@/domain/title-quality';
-
-type Status =
-  | { kind: 'idle' }
-  | { kind: 'generating' }
-  | { kind: 'error'; message: string; values: ProjectFormValues };
-
-export default function NewProjectScreen() {
-  const [, setActiveProjectId] = useActiveProjectId();
-  const [status, setStatus] = useState<Status>({ kind: 'idle' });
-  const tint = useThemeColor({}, 'tint');
-
-  const finish = (projectId: string) => {
-    setActiveProjectId(projectId);
-    router.back();
-  };
-
-  const generate = async (values: ProjectFormValues) => {
-    if (!isMeaningfulTitle(values.name) || !isMeaningfulTitle(values.goalDescription)) {
-      setStatus({
-        kind: 'error',
-        message: 'Titel und Ziel brauchen echte, aussagekräftige Wörter — bitte ausführlicher beschreiben.',
-        values,
-      });
-      return;
-    }
-
-    setStatus({ kind: 'generating' });
-    try {
-      const tree = await getTreeGeneratorProvider().generateTree({
-        projectTitle: values.name,
-        goalDescription: values.goalDescription,
-      });
-      const projectId = await importSkillTree(
-        {
-          schema_version: '1.0',
-          project: { name: values.name, goal_description: values.goalDescription },
-          nodes: tree.nodes.map((n) => ({ ...n, type: 'task' as const })),
-          edges: tree.edges,
-        },
-        { source: 'generated' }
-      );
-      finish(projectId);
-    } catch (error) {
-      console.error('skill tree generation failed', error);
-      setStatus({
-        kind: 'error',
-        message: 'Skilltree-Generierung fehlgeschlagen. Erneut versuchen oder ohne KI anlegen.',
-        values,
-      });
-    }
-  };
-
-  const createEmpty = async (values: ProjectFormValues) => {
-    const project = await projectsRepo.createProject(values);
-    finish(project.id);
-  };
-
-  return (
-    <ThemedView style={styles.container}>
-      <ProjectForm
-        submitLabel={status.kind === 'generating' ? 'Generiere Skilltree…' : 'Projekt erstellen'}
-        onSubmit={generate}
-      />
-      {status.kind === 'error' && (
-        <ThemedView style={styles.errorBox}>
-          <ThemedText style={styles.errorText}>{status.message}</ThemedText>
-          <Pressable onPress={() => generate(status.values)} hitSlop={8}>
-            <ThemedText type="defaultSemiBold" style={{ color: tint }}>
-              Erneut versuchen
-            </ThemedText>
-          </Pressable>
-          <Pressable onPress={() => createEmpty(status.values)} hitSlop={8}>
-            <ThemedText type="defaultSemiBold" style={{ color: tint }}>
-              Ohne KI anlegen
-            </ThemedText>
-          </Pressable>
-        </ThemedView>
-      )}
-    </ThemedView>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: { flex: 1 },
-  errorBox: {
-    paddingHorizontal: 20,
-    gap: 12,
-  },
-  errorText: {
-    opacity: 0.8,
-  },
-});
 </file>
 
 <file path="components/icons/icon-picker-modal.tsx">
@@ -3460,25 +3278,121 @@ export class BackendQuestGiverProvider implements QuestGiverProvider {
 }
 </file>
 
-<file path="providers/quest-giver/index.ts">
-import type { QuestGiverProvider } from './types';
-import { MockQuestGiverProvider } from './mock-provider';
-import { BackendQuestGiverProvider } from './backend-provider';
+<file path="providers/tree-generator/backend-provider.ts">
+import type { GeneratedTree, TreeGeneratorInput, TreeGeneratorProvider } from './types';
 
-let instance: QuestGiverProvider | null = null;
+/** Talks only to our own generic endpoint — never mentions a concrete LLM vendor. */
+export class BackendTreeGeneratorProvider implements TreeGeneratorProvider {
+  constructor(private readonly baseUrl: string) {}
+
+  async generateTree(input: TreeGeneratorInput): Promise<GeneratedTree> {
+    const response = await fetch(`${this.baseUrl}/api/generate-tree`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+
+    if (!response.ok) {
+      throw new Error(`generate-tree backend request failed: ${response.status}`);
+    }
+
+    return (await response.json()) as GeneratedTree;
+  }
+}
+</file>
+
+<file path="providers/tree-generator/index.ts">
+import type { TreeGeneratorProvider } from './types';
+import { MockTreeGeneratorProvider } from './mock-provider';
+import { BackendTreeGeneratorProvider } from './backend-provider';
+
+let instance: TreeGeneratorProvider | null = null;
 
 /**
- * Single swap point. Defaults to the offline mock (MVP, M5). Set EXPO_PUBLIC_LLM_BACKEND_URL
- * once /api/quest-giver is actually deployed (M6) to switch to the real backend — no other
- * call site changes. Note: the KI-Orb feature itself is currently disabled, see
- * app/(tabs)/tree.tsx and app/_layout.tsx — this file is unreached dead code until then.
+ * Single swap point. Defaults to the offline mock. Set EXPO_PUBLIC_LLM_BACKEND_URL
+ * once /api/generate-tree is actually deployed to switch to the real backend — no
+ * other call site changes.
  */
-export function getQuestGiverProvider(): QuestGiverProvider {
+export function getTreeGeneratorProvider(): TreeGeneratorProvider {
   if (!instance) {
     const backendUrl = process.env.EXPO_PUBLIC_LLM_BACKEND_URL;
-    instance = backendUrl ? new BackendQuestGiverProvider(backendUrl) : new MockQuestGiverProvider();
+    instance = backendUrl ? new BackendTreeGeneratorProvider(backendUrl) : new MockTreeGeneratorProvider();
   }
   return instance;
+}
+
+/** Audio input needs a real LLM to listen to it — the offline mock provider can't use it. */
+export function isBackendConfigured(): boolean {
+  return !!process.env.EXPO_PUBLIC_LLM_BACKEND_URL;
+}
+</file>
+
+<file path="providers/tree-generator/mock-provider.ts">
+import type { GeneratedTree, TreeGeneratorInput, TreeGeneratorProvider } from './types';
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Deterministic, network-free tree generation — lets the "create project" flow be exercised
+ * fully offline without an LLM backend configured. Always produces the same small shape:
+ * one root, two parallel steps, one step that needs both finished first.
+ */
+export class MockTreeGeneratorProvider implements TreeGeneratorProvider {
+  async generateTree(input: TreeGeneratorInput): Promise<GeneratedTree> {
+    await delay(600);
+
+    const goal = input.projectTitle.trim() || 'dein Projekt';
+
+    return {
+      nodes: [
+        { id: 'n1', title: 'Ziel klären', description: `Halte in ein bis zwei Sätzen fest, was "${goal}" konkret bedeutet.` },
+        { id: 'n2', title: 'Erste Recherche', description: 'Sammle die wichtigsten Infos, die du für den Einstieg brauchst.' },
+        { id: 'n3', title: 'Plan skizzieren', description: 'Grobe Reihenfolge der nächsten Schritte aufschreiben.' },
+        { id: 'n4', title: 'Ersten Schritt umsetzen', description: 'Den ersten konkreten Schritt aus dem Plan erledigen.' },
+      ],
+      edges: [
+        { from: 'n1', to: 'n2' },
+        { from: 'n1', to: 'n3' },
+        { from: 'n2', to: 'n4' },
+        { from: 'n3', to: 'n4' },
+      ],
+    };
+  }
+}
+</file>
+
+<file path="providers/tree-generator/types.ts">
+export interface TreeGeneratorInput {
+  projectTitle: string;
+  goalDescription: string;
+}
+
+export interface GeneratedTreeNode {
+  /** Scoped to this response only — never a real DB id. Used to resolve edges below. */
+  id: string;
+  title: string;
+  description?: string;
+  icon?: string;
+}
+
+export interface GeneratedTreeEdge {
+  from: string;
+  to: string;
+}
+
+export interface GeneratedTree {
+  nodes: GeneratedTreeNode[];
+  edges: GeneratedTreeEdge[];
+}
+
+/**
+ * App-side contract. Never mentions an LLM vendor — implementations may be a local
+ * mock (offline default) or a call to our own generic backend endpoint.
+ */
+export interface TreeGeneratorProvider {
+  generateTree(input: TreeGeneratorInput): Promise<GeneratedTree>;
 }
 </file>
 
@@ -3603,6 +3517,9 @@ import { GeminiClient } from './gemini-client';
 
 const DEFAULT_GEMINI_ENDPOINT =
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+// Cheaper, faster tier — transcription is plain "audio in, text out", no tree reasoning needed.
+const DEFAULT_GEMINI_TRANSCRIBE_ENDPOINT =
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent';
 
 /**
  * Server-only vendor selection. Swapping LLM providers is an env-var + implementation
@@ -3612,6 +3529,7 @@ export function getLlmClient(): LlmClient {
   const provider = process.env.LLM_PROVIDER ?? 'gemini';
   const apiKey = process.env.LLM_API_KEY;
   const endpoint = process.env.LLM_ENDPOINT ?? DEFAULT_GEMINI_ENDPOINT;
+  const transcribeEndpoint = process.env.LLM_TRANSCRIBE_ENDPOINT ?? DEFAULT_GEMINI_TRANSCRIBE_ENDPOINT;
 
   if (!apiKey) {
     throw new Error('LLM_API_KEY is not set. Configure it as a server-only env var — never bundle it into the client.');
@@ -3619,7 +3537,7 @@ export function getLlmClient(): LlmClient {
 
   switch (provider) {
     case 'gemini':
-      return new GeminiClient(apiKey, endpoint);
+      return new GeminiClient(apiKey, endpoint, transcribeEndpoint);
     default:
       throw new Error(`Unknown LLM_PROVIDER "${provider}"`);
   }
@@ -3799,7 +3717,13 @@ Read the exact versioned docs at https://docs.expo.dev/versions/v54.0.0/ before 
           }
         }
       ],
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Erlaube den Zugriff auf das Mikrofon, um dein Ziel per Sprachaufnahme zu beschreiben."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
@@ -3854,9 +3778,11 @@ module.exports = config;
     "@react-navigation/elements": "^2.6.3",
     "@react-navigation/native": "^7.1.8",
     "expo": "~54.0.35",
+    "expo-audio": "~1.1.1",
     "expo-blur": "~15.0.8",
     "expo-constants": "~18.0.13",
     "expo-crypto": "~15.0.9",
+    "expo-file-system": "~19.0.23",
     "expo-font": "~14.0.12",
     "expo-glass-effect": "~0.1.10",
     "expo-haptics": "~15.0.8",
@@ -4091,6 +4017,235 @@ const styles = StyleSheet.create({
 });
 </file>
 
+<file path="app/node/[id]/edit.tsx">
+import { useCallback, useState } from 'react';
+import { Alert, Pressable, View } from 'react-native';
+import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
+
+import { NodeForm, type NodeFormValues } from '@/components/skill-tree/node-form';
+import { ThemedView } from '@/components/themed-view';
+import { IconSymbol } from '@/components/ui/icon-symbol';
+import { useThemeColor } from '@/hooks/use-theme-color';
+import * as nodesRepo from '@/db/repositories/nodes-repo';
+import * as edgesRepo from '@/db/repositories/edges-repo';
+import { directChildren, type UnlockEdge } from '@/domain/unlock';
+import { markMastered, markUnmastered, reevaluateProjectGraph } from '@/domain/mastery';
+import type { SkillNode } from '@/db/types';
+
+export default function EditNodeScreen() {
+  const { id } = useLocalSearchParams<{ id: string }>();
+  const [node, setNode] = useState<SkillNode | null>(null);
+  const [existingEdges, setExistingEdges] = useState<UnlockEdge[]>([]);
+  const [initialPrerequisiteIds, setInitialPrerequisiteIds] = useState<string[]>([]);
+  const tint = useThemeColor({}, 'tint');
+
+  useFocusEffect(
+    useCallback(() => {
+      (async () => {
+        const current = await nodesRepo.getNode(id);
+        if (!current) return;
+
+        const allEdges = await edgesRepo.listEdgesByProject(current.projectId);
+        const edges = allEdges.map((e) => ({ sourceNodeId: e.sourceNodeId, targetNodeId: e.targetNodeId }));
+
+        // `setNode` must be the LAST state update here: it's what flips the `!node` guard
+        // below and mounts <NodeForm>, which only reads `initialValues` once (on mount, via
+        // useState's initializer). Setting it before the other state was ready meant NodeForm
+        // mounted with an empty `initialPrerequisiteIds` — every save then wiped the node's
+        // real prerequisite edges, regardless of what the user actually touched.
+        setExistingEdges(edges);
+        setInitialPrerequisiteIds(allEdges.filter((e) => e.targetNodeId === id).map((e) => e.sourceNodeId));
+        setNode(current);
+      })();
+    }, [id])
+  );
+
+  if (!node) return <ThemedView style={{ flex: 1 }} />;
+
+  const handleAutosave = async (values: NodeFormValues) => {
+    await nodesRepo.updateNode(id, {
+      title: values.title,
+      description: values.description,
+      icon: values.icon,
+      type: 'task',
+    });
+  };
+
+  const handleMarkDone = async () => {
+    if (node.state === 'mastered') {
+      await markUnmastered(node.projectId, node.id);
+    } else if (node.state === 'available') {
+      await markMastered(node.id);
+    }
+    router.back();
+  };
+
+  const handleDelete = () => {
+    const dependentCount = directChildren(existingEdges, node.id).length;
+    const dependentWarning =
+      dependentCount > 0
+        ? `\n\n${dependentCount} ${dependentCount === 1 ? 'anderer Knoten verliert' : 'andere Knoten verlieren'} diese Voraussetzung.`
+        : '';
+
+    Alert.alert('Knoten löschen', `"${node.title}" unwiderruflich löschen?${dependentWarning}`, [
+      { text: 'Abbrechen', style: 'cancel' },
+      {
+        text: 'Löschen',
+        style: 'destructive',
+        onPress: async () => {
+          await nodesRepo.deleteNode(node.id);
+          // The deleted node may have been a dependent's last unmet prerequisite —
+          // recompute rather than leave it stuck on its old locked/available state.
+          await reevaluateProjectGraph(node.projectId);
+          router.back();
+        },
+      },
+    ]);
+  };
+
+  return (
+    <>
+      <Stack.Screen
+        options={{
+          title: node.title,
+          headerRight: () => (
+            <View style={{ flexDirection: 'row', gap: 16 }}>
+              {node.state !== 'locked' ? (
+                <Pressable onPress={handleMarkDone} hitSlop={8}>
+                  <IconSymbol name="checkmark.circle.fill" size={24} color={tint} />
+                </Pressable>
+              ) : null}
+              <Pressable onPress={handleDelete} hitSlop={8}>
+                <IconSymbol name="trash" size={24} color="#E5484D" />
+              </Pressable>
+            </View>
+          ),
+        }}
+      />
+      <NodeForm
+        candidatePrerequisites={[]}
+        existingEdges={existingEdges}
+        initialValues={{
+          title: node.title,
+          description: node.description,
+          icon: node.icon,
+          prerequisiteIds: initialPrerequisiteIds,
+        }}
+        onAutosave={handleAutosave}
+      />
+    </>
+  );
+}
+</file>
+
+<file path="app/project/new.tsx">
+import { useState } from 'react';
+import { Pressable, StyleSheet } from 'react-native';
+import { router } from 'expo-router';
+
+import { ProjectForm, type ProjectFormValues } from '@/components/projects/project-form';
+import { ThemedText } from '@/components/themed-text';
+import { ThemedView } from '@/components/themed-view';
+import { useThemeColor } from '@/hooks/use-theme-color';
+import { useActiveProjectId } from '@/hooks/use-active-project-id';
+import * as projectsRepo from '@/db/repositories/projects-repo';
+import { importSkillTree } from '@/db/import-skill-tree';
+import { getTreeGeneratorProvider } from '@/providers/tree-generator';
+import { isMeaningfulTitle } from '@/domain/title-quality';
+
+type Status =
+  | { kind: 'idle' }
+  | { kind: 'generating' }
+  | { kind: 'error'; message: string; values: ProjectFormValues };
+
+export default function NewProjectScreen() {
+  const [, setActiveProjectId] = useActiveProjectId();
+  const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const tint = useThemeColor({}, 'tint');
+
+  const finish = (projectId: string) => {
+    setActiveProjectId(projectId);
+    router.back();
+  };
+
+  const generate = async (values: ProjectFormValues) => {
+    if (!isMeaningfulTitle(values.name) || !isMeaningfulTitle(values.goalDescription)) {
+      setStatus({
+        kind: 'error',
+        message: 'Titel und Ziel brauchen echte, aussagekräftige Wörter — bitte ausführlicher beschreiben.',
+        values,
+      });
+      return;
+    }
+
+    setStatus({ kind: 'generating' });
+    try {
+      const tree = await getTreeGeneratorProvider().generateTree({
+        projectTitle: values.name,
+        goalDescription: values.goalDescription,
+      });
+      const projectId = await importSkillTree(
+        {
+          schema_version: '1.0',
+          project: { name: values.name, goal_description: values.goalDescription },
+          nodes: tree.nodes.map((n) => ({ ...n, type: 'task' as const })),
+          edges: tree.edges,
+        },
+        { source: 'generated' }
+      );
+      finish(projectId);
+    } catch (error) {
+      console.error('skill tree generation failed', error);
+      setStatus({
+        kind: 'error',
+        message: 'Skilltree-Generierung fehlgeschlagen. Erneut versuchen oder ohne KI anlegen.',
+        values,
+      });
+    }
+  };
+
+  const createEmpty = async (values: ProjectFormValues) => {
+    const project = await projectsRepo.createProject(values);
+    finish(project.id);
+  };
+
+  return (
+    <ThemedView style={styles.container}>
+      <ProjectForm
+        submitLabel={status.kind === 'generating' ? 'Generiere Skilltree…' : 'Projekt erstellen'}
+        onSubmit={generate}
+      />
+      {status.kind === 'error' && (
+        <ThemedView style={styles.errorBox}>
+          <ThemedText style={styles.errorText}>{status.message}</ThemedText>
+          <Pressable onPress={() => generate(status.values)} hitSlop={8}>
+            <ThemedText type="defaultSemiBold" style={{ color: tint }}>
+              Erneut versuchen
+            </ThemedText>
+          </Pressable>
+          <Pressable onPress={() => createEmpty(status.values)} hitSlop={8}>
+            <ThemedText type="defaultSemiBold" style={{ color: tint }}>
+              Ohne KI anlegen
+            </ThemedText>
+          </Pressable>
+        </ThemedView>
+      )}
+    </ThemedView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  errorBox: {
+    paddingHorizontal: 20,
+    gap: 12,
+  },
+  errorText: {
+    opacity: 0.8,
+  },
+});
+</file>
+
 <file path="components/orb/floating-orb.tsx">
 import { Pressable, StyleSheet } from 'react-native';
 import { router } from 'expo-router';
@@ -4148,11 +4303,20 @@ const styles = StyleSheet.create({
 
 <file path="components/projects/project-form.tsx">
 import { useState } from 'react';
-import { StyleSheet, TextInput, Pressable } from 'react-native';
+import { ActivityIndicator, Alert, StyleSheet, TextInput, Pressable, View } from 'react-native';
+import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioRecorder } from 'expo-audio';
+import { File } from 'expo-file-system';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import { isBackendConfigured } from '@/providers/tree-generator';
+import { getAudioTranscriberProvider } from '@/providers/audio-transcriber';
+
+// Raw recorder output (m4a/AAC container) sent under this mimeType — Gemini's documented inline
+// audio support only lists bare "audio/aac", not the mp4/m4a container name. Verified working.
+const GOAL_AUDIO_MIME_TYPE = 'audio/aac';
 
 export interface ProjectFormValues {
   name: string;
@@ -4168,14 +4332,18 @@ interface ProjectFormProps {
 export function ProjectForm({ initialValues, submitLabel, onSubmit }: ProjectFormProps) {
   const [name, setName] = useState(initialValues?.name ?? '');
   const [goalDescription, setGoalDescription] = useState(initialValues?.goalDescription ?? '');
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
   const textColor = useThemeColor({}, 'text');
   const tint = useThemeColor({}, 'tint');
   const tintText = useThemeColor({}, 'tintText');
   const borderColor = useThemeColor({ light: '#E0E0E0', dark: '#333' }, 'text');
 
-  const canSubmit = name.trim().length > 0 && !submitting;
+  const canSubmit = name.trim().length > 0 && !submitting && !isRecording && !isTranscribing;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -4185,6 +4353,39 @@ export function ProjectForm({ initialValues, submitLabel, onSubmit }: ProjectFor
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleMicPress = async () => {
+    if (isRecording) {
+      await recorder.stop();
+      setIsRecording(false);
+      const uri = recorder.uri;
+      if (!uri) return;
+
+      setIsTranscribing(true);
+      try {
+        const base64 = await new File(uri).base64();
+        const { text } = await getAudioTranscriberProvider().transcribe({ base64, mimeType: GOAL_AUDIO_MIME_TYPE });
+        // Append rather than replace — repeat recordings accumulate, manual edits aren't clobbered.
+        setGoalDescription((prev) => (prev.trim().length > 0 ? `${prev.trim()} ${text}` : text));
+      } catch (error) {
+        console.error('audio transcription failed', error);
+        Alert.alert('Transkription fehlgeschlagen', 'Die Sprachaufnahme konnte nicht in Text umgewandelt werden. Erneut versuchen?');
+      } finally {
+        setIsTranscribing(false);
+      }
+      return;
+    }
+
+    const permission = await AudioModule.requestRecordingPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Mikrofon-Zugriff verweigert', 'Erlaube den Mikrofon-Zugriff in den Systemeinstellungen, um dein Ziel per Sprachaufnahme zu beschreiben.');
+      return;
+    }
+    await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+    await recorder.prepareToRecordAsync();
+    recorder.record();
+    setIsRecording(true);
   };
 
   return (
@@ -4200,9 +4401,19 @@ export function ProjectForm({ initialValues, submitLabel, onSubmit }: ProjectFor
         style={[styles.input, { color: textColor, borderColor }]}
       />
 
-      <ThemedText type="defaultSemiBold" style={styles.label}>
-        Ziel
-      </ThemedText>
+      <View style={styles.goalHeaderRow}>
+        <ThemedText type="defaultSemiBold" style={styles.label}>
+          Ziel
+        </ThemedText>
+        {isBackendConfigured() &&
+          (isTranscribing ? (
+            <ActivityIndicator size="small" color={tint} />
+          ) : (
+            <Pressable onPress={handleMicPress} hitSlop={8}>
+              <IconSymbol name={isRecording ? 'stop.fill' : 'mic.fill'} size={22} color={isRecording ? '#E5484D' : tint} />
+            </Pressable>
+          ))}
+      </View>
       <TextInput
         value={goalDescription}
         onChangeText={setGoalDescription}
@@ -4230,6 +4441,11 @@ const styles = StyleSheet.create({
   },
   label: {
     marginTop: 12,
+  },
+  goalHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   input: {
     borderWidth: StyleSheet.hairlineWidth,
@@ -4326,84 +4542,319 @@ const styles = StyleSheet.create({
 });
 </file>
 
-<file path="components/skill-tree/layout.ts">
+<file path="components/skill-tree/layout.test.ts">
+import { computeLayout } from './layout';
 import type { SkillNode } from '@/db/types';
 
-export interface LayoutPosition {
-  x: number;
-  y: number;
+function makeNode(id: string, createdAt: string): SkillNode {
+  return {
+    id,
+    projectId: 'p1',
+    type: 'task',
+    title: id,
+    description: '',
+    icon: null,
+    state: 'locked',
+    posX: null,
+    posY: null,
+    tier: null,
+    source: 'manual',
+    masteredAt: null,
+    createdAt,
+    updatedAt: createdAt,
+  };
 }
 
-export interface LayoutResult {
-  positions: Map<string, LayoutPosition>;
-  width: number;
-  height: number;
+function makeEdge(id: string, sourceNodeId: string, targetNodeId: string) {
+  return { id, sourceNodeId, targetNodeId };
 }
 
-interface LayoutEdge {
-  sourceNodeId: string;
-  targetNodeId: string;
-}
-
-const TIER_HEIGHT = 140;
-const NODE_SPACING = 100;
-const TOP_PADDING = 80;
-const SIDE_PADDING = 60;
-
-/**
- * Depth-based tier layout: a node's row is 1 + max(prerequisite rows), so the tree
- * always grows downward as dependency chains lengthen — independent of the stored
- * `tier` hint, which only ever reflects what was true at creation time.
- */
-export function computeLayout(nodes: SkillNode[], edges: LayoutEdge[]): LayoutResult {
-  const prereqsByTarget = new Map<string, string[]>();
+// Mirrors the inversion-count crossing test used inside computeLayout, applied to a resolved
+// layout's own positions/waypoints instead of internal column indices — an independent check
+// that operates purely on the public output shape.
+function countCrossings(
+  edges: { id: string; sourceNodeId: string; targetNodeId: string }[],
+  positions: Map<string, { x: number; y: number }>,
+  edgeWaypoints: Map<string, { x: number; y: number }[]>,
+): number {
+  type Segment = { x1: number; y1: number; x2: number; y2: number };
+  const segments: Segment[] = [];
   for (const e of edges) {
-    if (!prereqsByTarget.has(e.targetNodeId)) prereqsByTarget.set(e.targetNodeId, []);
-    prereqsByTarget.get(e.targetNodeId)!.push(e.sourceNodeId);
+    const from = positions.get(e.sourceNodeId)!;
+    const to = positions.get(e.targetNodeId)!;
+    const points = [from, ...(edgeWaypoints.get(e.id) ?? []), to];
+    for (let i = 0; i < points.length - 1; i++) {
+      segments.push({ x1: points[i].x, y1: points[i].y, x2: points[i + 1].x, y2: points[i + 1].y });
+    }
   }
 
-  const depthCache = new Map<string, number>();
-  function depthOf(id: string, visiting: Set<string>): number {
-    const cached = depthCache.get(id);
-    if (cached !== undefined) return cached;
-    if (visiting.has(id)) return 0; // cycle guard; acyclicity is enforced at write time
-
-    visiting.add(id);
-    const prereqs = prereqsByTarget.get(id) ?? [];
-    const depth = prereqs.length === 0 ? 0 : 1 + Math.max(...prereqs.map((p) => depthOf(p, visiting)));
-    visiting.delete(id);
-
-    depthCache.set(id, depth);
-    return depth;
+  function crosses(a: Segment, b: Segment): boolean {
+    // Only segments occupying the same horizontal band (same tier-to-tier step) can cross in
+    // this layout (every segment spans exactly one tier row), and they share no endpoint.
+    if (Math.max(a.y1, a.y2) !== Math.max(b.y1, b.y2) || Math.min(a.y1, a.y2) !== Math.min(b.y1, b.y2)) return false;
+    const shareEndpoint =
+      (a.x1 === b.x1 && a.y1 === b.y1) ||
+      (a.x1 === b.x2 && a.y1 === b.y2) ||
+      (a.x2 === b.x1 && a.y2 === b.y1) ||
+      (a.x2 === b.x2 && a.y2 === b.y2);
+    if (shareEndpoint) return false;
+    const topX = a.y1 < a.y2 ? [a.x1, a.x2] : [a.x2, a.x1];
+    const botX = b.y1 < b.y2 ? [b.x1, b.x2] : [b.x2, b.x1];
+    return (topX[0] - botX[0]) * (topX[1] - botX[1]) < 0;
   }
 
-  const tiers = new Map<number, SkillNode[]>();
-  for (const node of nodes) {
-    const tier = depthOf(node.id, new Set());
-    if (!tiers.has(tier)) tiers.set(tier, []);
-    tiers.get(tier)!.push(node);
+  let crossings = 0;
+  for (let i = 0; i < segments.length; i++) {
+    for (let j = i + 1; j < segments.length; j++) {
+      if (crosses(segments[i], segments[j])) crossings++;
+    }
   }
+  return crossings;
+}
 
-  const sortedTierKeys = Array.from(tiers.keys()).sort((a, b) => a - b);
-  const maxRowCount = Math.max(1, ...sortedTierKeys.map((t) => tiers.get(t)!.length));
-  const width = SIDE_PADDING * 2 + maxRowCount * NODE_SPACING;
-  const positions = new Map<string, LayoutPosition>();
+describe('computeLayout', () => {
+  it('lays out a single node with no edges and floors width/height', () => {
+    const nodes = [makeNode('a', '2024-01-01T00:00:00Z')];
+    const result = computeLayout(nodes, []);
 
-  sortedTierKeys.forEach((tier, rowIndex) => {
-    const rowNodes = tiers.get(tier)!.slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    const rowWidth = rowNodes.length * NODE_SPACING;
-    const startX = (width - rowWidth) / 2 + NODE_SPACING / 2;
-    rowNodes.forEach((node, colIndex) => {
-      positions.set(node.id, {
-        x: startX + colIndex * NODE_SPACING,
-        y: TOP_PADDING + rowIndex * TIER_HEIGHT,
-      });
-    });
+    expect(result.positions.size).toBe(1);
+    expect(result.edgeWaypoints.size).toBe(0);
+    expect(result.width).toBe(320);
+    expect(result.height).toBe(320);
   });
 
-  const height = TOP_PADDING * 2 + sortedTierKeys.length * TIER_HEIGHT;
-  return { positions, width: Math.max(width, 320), height: Math.max(height, 320) };
-}
+  it('stacks a simple chain in one column with no waypoints', () => {
+    const nodes = [
+      makeNode('a', '2024-01-01T00:00:00Z'),
+      makeNode('b', '2024-01-02T00:00:00Z'),
+      makeNode('c', '2024-01-03T00:00:00Z'),
+    ];
+    const edges = [makeEdge('e1', 'a', 'b'), makeEdge('e2', 'b', 'c')];
+    const result = computeLayout(nodes, edges);
+
+    const [a, b, c] = ['a', 'b', 'c'].map((id) => result.positions.get(id)!);
+    expect(a.x).toBe(b.x);
+    expect(b.x).toBe(c.x);
+    expect(b.y - a.y).toBe(140);
+    expect(c.y - b.y).toBe(140);
+    expect(result.edgeWaypoints.get('e1')).toEqual([]);
+    expect(result.edgeWaypoints.get('e2')).toEqual([]);
+  });
+
+  it('lays out a diamond with no dummy waypoints needed', () => {
+    const nodes = ['a', 'b', 'c', 'd'].map((id, i) => makeNode(id, `2024-01-0${i + 1}T00:00:00Z`));
+    const edges = [
+      makeEdge('e1', 'a', 'b'),
+      makeEdge('e2', 'a', 'c'),
+      makeEdge('e3', 'b', 'd'),
+      makeEdge('e4', 'c', 'd'),
+    ];
+    const result = computeLayout(nodes, edges);
+
+    expect(result.positions.size).toBe(4);
+    const b = result.positions.get('b')!;
+    const c = result.positions.get('c')!;
+    expect(b.y).toBe(c.y);
+    expect(b.x).not.toBe(c.x);
+    for (const wp of result.edgeWaypoints.values()) expect(wp).toEqual([]);
+  });
+
+  it('splits a skip-tier edge into a dummy chain that avoids sibling columns', () => {
+    // a(tier0) -> b(tier1) -> c(tier2); d(tier3) requires both b->...->c chain and a directly,
+    // so edge a->d spans tiers 0..3 and must route around b (tier1) and c (tier2).
+    const nodes = ['a', 'b', 'c', 'd'].map((id, i) => makeNode(id, `2024-01-0${i + 1}T00:00:00Z`));
+    const edges = [
+      makeEdge('ab', 'a', 'b'),
+      makeEdge('bc', 'b', 'c'),
+      makeEdge('cd', 'c', 'd'),
+      makeEdge('ad', 'a', 'd'),
+    ];
+    const result = computeLayout(nodes, edges);
+
+    const waypoints = result.edgeWaypoints.get('ad')!;
+    expect(waypoints).toHaveLength(2);
+
+    const b = result.positions.get('b')!;
+    const c = result.positions.get('c')!;
+    expect(waypoints[0].y).toBe(b.y);
+    expect(waypoints[1].y).toBe(c.y);
+    expect(waypoints[0].x).not.toBe(b.x);
+    expect(waypoints[1].x).not.toBe(c.x);
+  });
+
+  it('grows width when a skip-tier edge reserves extra dummy columns', () => {
+    // Pad tier1/tier2 to 3 real columns each so the baseline width already clears the
+    // Math.max(_, 320) floor — otherwise both variants would flatten to the same floor value.
+    const ids = ['a', 'b', 'c', 'd', 'x1', 'x2', 'y1', 'y2'];
+    const buildNodes = () => ids.map((id, i) => makeNode(id, `2024-01-0${i + 1}T00:00:00Z`));
+    const baseEdges = [
+      makeEdge('ab', 'a', 'b'),
+      makeEdge('bc', 'b', 'c'),
+      makeEdge('cd', 'c', 'd'),
+      makeEdge('ax1', 'a', 'x1'),
+      makeEdge('ax2', 'a', 'x2'),
+      makeEdge('x1y1', 'x1', 'y1'),
+      makeEdge('x2y2', 'x2', 'y2'),
+    ];
+
+    const withoutLongEdge = computeLayout(buildNodes(), baseEdges);
+    const withLongEdge = computeLayout(buildNodes(), [...baseEdges, makeEdge('ad', 'a', 'd')]);
+
+    expect(withLongEdge.width).toBeGreaterThan(withoutLongEdge.width);
+  });
+
+  it('never leaks a dummy key into the returned positions map', () => {
+    const nodes = ['a', 'b', 'c', 'd'].map((id, i) => makeNode(id, `2024-01-0${i + 1}T00:00:00Z`));
+    const edges = [
+      makeEdge('ab', 'a', 'b'),
+      makeEdge('bc', 'b', 'c'),
+      makeEdge('cd', 'c', 'd'),
+      makeEdge('ad', 'a', 'd'),
+    ];
+    const result = computeLayout(nodes, edges);
+    const nodeIds = new Set(nodes.map((n) => n.id));
+
+    for (const key of result.positions.keys()) expect(nodeIds.has(key)).toBe(true);
+  });
+
+  it('is deterministic across repeated calls with equivalent input', () => {
+    const build = () => ({
+      nodes: ['a', 'b', 'c', 'd'].map((id, i) => makeNode(id, `2024-01-0${i + 1}T00:00:00Z`)),
+      edges: [
+        makeEdge('ab', 'a', 'b'),
+        makeEdge('bc', 'b', 'c'),
+        makeEdge('cd', 'c', 'd'),
+        makeEdge('ad', 'a', 'd'),
+      ],
+    });
+
+    const first = build();
+    const second = build();
+    const resultA = computeLayout(first.nodes, first.edges);
+    const resultB = computeLayout(second.nodes, second.edges);
+
+    expect(resultA.positions).toEqual(resultB.positions);
+    expect(resultA.edgeWaypoints).toEqual(resultB.edgeWaypoints);
+  });
+
+  it('keeps a longer chain perfectly vertical', () => {
+    const ids = ['a', 'b', 'c', 'd', 'e'];
+    const nodes = ids.map((id, i) => makeNode(id, `2024-01-0${i + 1}T00:00:00Z`));
+    const edges = [
+      makeEdge('ab', 'a', 'b'),
+      makeEdge('bc', 'b', 'c'),
+      makeEdge('cd', 'c', 'd'),
+      makeEdge('de', 'd', 'e'),
+    ];
+    const result = computeLayout(nodes, edges);
+    const xs = ids.map((id) => result.positions.get(id)!.x);
+
+    expect(new Set(xs).size).toBe(1);
+  });
+
+  it('centers a parent exactly on the mean x of its two children', () => {
+    const nodes = ['a', 'b', 'c', 'd'].map((id, i) => makeNode(id, `2024-01-0${i + 1}T00:00:00Z`));
+    const edges = [
+      makeEdge('e1', 'a', 'b'),
+      makeEdge('e2', 'a', 'c'),
+      makeEdge('e3', 'b', 'd'),
+      makeEdge('e4', 'c', 'd'),
+    ];
+    const result = computeLayout(nodes, edges);
+    const a = result.positions.get('a')!;
+    const b = result.positions.get('b')!;
+    const c = result.positions.get('c')!;
+    const d = result.positions.get('d')!;
+
+    expect(a.x).toBeCloseTo((b.x + c.x) / 2, 5);
+    expect(d.x).toBeCloseTo((b.x + c.x) / 2, 5);
+  });
+
+  it('never places two nodes in the same tier closer than the minimum spacing', () => {
+    const ids = ['a', 'b', 'c', 'd', 'x1', 'x2', 'y1', 'y2'];
+    const nodes = ids.map((id, i) => makeNode(id, `2024-01-0${i + 1}T00:00:00Z`));
+    const edges = [
+      makeEdge('ab', 'a', 'b'),
+      makeEdge('bc', 'b', 'c'),
+      makeEdge('cd', 'c', 'd'),
+      makeEdge('ax1', 'a', 'x1'),
+      makeEdge('ax2', 'a', 'x2'),
+      makeEdge('x1y1', 'x1', 'y1'),
+      makeEdge('x2y2', 'x2', 'y2'),
+      makeEdge('ad', 'a', 'd'),
+    ];
+    const result = computeLayout(nodes, edges);
+
+    const byTierY = new Map<number, number[]>();
+    for (const p of result.positions.values()) {
+      if (!byTierY.has(p.y)) byTierY.set(p.y, []);
+      byTierY.get(p.y)!.push(p.x);
+    }
+    for (const xs of byTierY.values()) {
+      xs.sort((a, b) => a - b);
+      for (let i = 1; i < xs.length; i++) {
+        expect(xs[i] - xs[i - 1]).toBeGreaterThanOrEqual(100 - 1e-6);
+      }
+    }
+  });
+
+  it('produces zero edge-edge crossings for a plain diamond', () => {
+    const nodes = ['a', 'b', 'c', 'd'].map((id, i) => makeNode(id, `2024-01-0${i + 1}T00:00:00Z`));
+    const edges = [
+      makeEdge('e1', 'a', 'b'),
+      makeEdge('e2', 'a', 'c'),
+      makeEdge('e3', 'b', 'd'),
+      makeEdge('e4', 'c', 'd'),
+    ];
+    const result = computeLayout(nodes, edges);
+
+    expect(countCrossings(edges, result.positions, result.edgeWaypoints)).toBe(0);
+  });
+
+  it('gives an isolated node with no same-tier neighbor the maximum label width', () => {
+    const nodes = [makeNode('a', '2024-01-01T00:00:00Z')];
+    const result = computeLayout(nodes, []);
+
+    expect(result.labelWidths.get('a')).toBe(320);
+  });
+
+  it('caps label width to the default column when siblings sit at minimum spacing', () => {
+    // b and c are the only two nodes in tier1, exactly NODE_SPACING (100) apart — mirrors the
+    // fixed 84px column every node used to get, so dense trees look unchanged.
+    const nodes = ['a', 'b', 'c', 'd'].map((id, i) => makeNode(id, `2024-01-0${i + 1}T00:00:00Z`));
+    const edges = [
+      makeEdge('e1', 'a', 'b'),
+      makeEdge('e2', 'a', 'c'),
+      makeEdge('e3', 'b', 'd'),
+      makeEdge('e4', 'c', 'd'),
+    ];
+    const result = computeLayout(nodes, edges);
+
+    expect(result.labelWidths.get('b')).toBe(84);
+    expect(result.labelWidths.get('c')).toBe(84);
+    // a and d are the lone occupants of their own tier — free to use the max width.
+    expect(result.labelWidths.get('a')).toBe(320);
+    expect(result.labelWidths.get('d')).toBe(320);
+  });
+
+  it('untangles a barycenter tie via the transpose pass', () => {
+    // Middle tier has one node (m1) requiring two outer-column roots (p0, p2) and a sibling
+    // (m2) requiring only the middle root (p1) — a classic barycenter tie (both score the same
+    // mean column) that a naive sortKey tiebreak can leave crossed. Also feeds a deeper tier (q)
+    // requiring both m1 and m2, so the check exercises two tier boundaries at once.
+    const nodes = ['p0', 'p1', 'p2', 'm1', 'm2', 'q'].map((id, i) => makeNode(id, `2024-01-0${i + 1}T00:00:00Z`));
+    const edges = [
+      makeEdge('p0m1', 'p0', 'm1'),
+      makeEdge('p2m1', 'p2', 'm1'),
+      makeEdge('p1m2', 'p1', 'm2'),
+      makeEdge('m1q', 'm1', 'q'),
+      makeEdge('m2q', 'm2', 'q'),
+    ];
+    const result = computeLayout(nodes, edges);
+
+    expect(countCrossings(edges, result.positions, result.edgeWaypoints)).toBe(0);
+  });
+});
 </file>
 
 <file path="components/ui/icon-symbol.tsx">
@@ -4453,6 +4904,8 @@ const MAPPING = {
   'arrow.uturn.backward': 'undo',
   'line.3.horizontal': 'menu',
   'magnifyingglass': 'search',
+  'mic.fill': 'mic',
+  'stop.fill': 'stop',
 } as IconMapping;
 
 /**
@@ -7266,43 +7719,6 @@ export function searchSkillIcons(query: string): SkillIconDefinition[] {
 }
 </file>
 
-<file path="constants/skill-tree-theme.ts">
-/**
- * Central color palette for the skill-tree canvas (WoW talent-tree aesthetic).
- * Tune the violet/gold tones here — nothing else in tree-canvas.tsx / node-glyph.tsx
- * should hardcode a color.
- */
-export const SkillTreeColors = {
-  background: '#1A1025',
-  /** Node title label — fixed, not theme-following: the canvas background never changes with
-   * light/dark mode, so text tied to the app theme's text color can end up near-invisible
-   * (e.g. light-mode's near-black text on this near-black purple). */
-  label: '#F3EDFB',
-
-  edge: {
-    inactive: '#4B5563',
-    active: '#FACC15',
-  },
-
-  node: {
-    background: '#150C22',
-    locked: {
-      border: '#6B7280',
-      opacity: 0.5,
-    },
-    available: {
-      border: '#C7CDD6',
-      opacity: 1,
-    },
-    mastered: {
-      border: '#FACC15',
-      opacity: 1,
-      glow: 'rgba(250, 204, 21, 0.55)',
-    },
-  },
-} as const;
-</file>
-
 <file path="constants/theme.ts">
 /**
  * Below are the colors that are used in the app. The colors are defined in the light and dark mode.
@@ -7433,6 +7849,225 @@ export async function deleteProject(id: string): Promise<void> {
   const db = await getDb();
   await db.runAsync('DELETE FROM projects WHERE id = ?;', [id]);
 }
+</file>
+
+<file path="domain/mastery.ts">
+import * as nodesRepo from '@/db/repositories/nodes-repo';
+import * as edgesRepo from '@/db/repositories/edges-repo';
+import { computeUnlocks, recomputeAllStates } from './unlock';
+
+/** Marks a node mastered and unlocks any direct children whose prerequisites are now all satisfied. */
+export async function markMastered(nodeId: string): Promise<string[]> {
+  const node = await nodesRepo.getNode(nodeId);
+  if (!node) throw new Error(`Node not found: ${nodeId}`);
+  if (node.state === 'mastered') return [];
+
+  await nodesRepo.setNodeState(nodeId, 'mastered');
+
+  const childIds = await edgesRepo.listDirectChildren(nodeId);
+  if (childIds.length === 0) return [];
+
+  const edges = await edgesRepo.listEdgesByProject(node.projectId);
+  const relevantEdges = edges
+    .filter((e) => childIds.includes(e.targetNodeId))
+    .map((e) => ({ sourceNodeId: e.sourceNodeId, targetNodeId: e.targetNodeId }));
+
+  const relevantNodeIds = new Set<string>([...childIds, ...relevantEdges.map((e) => e.sourceNodeId)]);
+  const relevantNodes = (
+    await Promise.all(Array.from(relevantNodeIds).map((id) => nodesRepo.getNode(id)))
+  ).filter((n): n is NonNullable<typeof n> => n !== null);
+
+  const unlockedIds = computeUnlocks(
+    relevantNodes.map((n) => ({ id: n.id, state: n.state })),
+    relevantEdges,
+    childIds
+  );
+
+  for (const id of unlockedIds) {
+    await nodesRepo.setNodeState(id, 'available');
+  }
+  return unlockedIds;
+}
+
+/** Un-masters a node and re-evaluates the whole project graph (rare debug/undo path). */
+export async function markUnmastered(projectId: string, nodeId: string): Promise<void> {
+  const [allNodes, allEdges] = await Promise.all([
+    nodesRepo.listNodesByProject(projectId),
+    edgesRepo.listEdgesByProject(projectId),
+  ]);
+
+  const masteredIds = new Set(
+    allNodes.filter((n) => n.state === 'mastered' && n.id !== nodeId).map((n) => n.id)
+  );
+
+  const recomputed = recomputeAllStates(
+    allNodes.map((n) => n.id),
+    allEdges.map((e) => ({ sourceNodeId: e.sourceNodeId, targetNodeId: e.targetNodeId })),
+    masteredIds
+  );
+
+  for (const node of allNodes) {
+    const nextState = recomputed.get(node.id);
+    if (nextState && nextState !== node.state) {
+      await nodesRepo.setNodeState(node.id, nextState);
+    }
+  }
+}
+
+/**
+ * Re-evaluates every node's state from the DB's current mastered set — for the rare edit-time
+ * path where a node's own prerequisites changed. Cascades exactly like markUnmastered, including
+ * demoting an already-mastered node whose (edited) prerequisites are no longer all satisfied.
+ */
+export async function reevaluateProjectGraph(projectId: string): Promise<void> {
+  const [allNodes, allEdges] = await Promise.all([
+    nodesRepo.listNodesByProject(projectId),
+    edgesRepo.listEdgesByProject(projectId),
+  ]);
+
+  const masteredIds = new Set(allNodes.filter((n) => n.state === 'mastered').map((n) => n.id));
+
+  const recomputed = recomputeAllStates(
+    allNodes.map((n) => n.id),
+    allEdges.map((e) => ({ sourceNodeId: e.sourceNodeId, targetNodeId: e.targetNodeId })),
+    masteredIds
+  );
+
+  for (const node of allNodes) {
+    const nextState = recomputed.get(node.id);
+    if (nextState && nextState !== node.state) {
+      await nodesRepo.setNodeState(node.id, nextState);
+    }
+  }
+}
+</file>
+
+<file path="providers/quest-giver/index.ts">
+import type { QuestGiverProvider } from './types';
+import { MockQuestGiverProvider } from './mock-provider';
+import { BackendQuestGiverProvider } from './backend-provider';
+
+let instance: QuestGiverProvider | null = null;
+
+/**
+ * Single swap point. Defaults to the offline mock (MVP, M5). Set EXPO_PUBLIC_LLM_BACKEND_URL
+ * once /api/quest-giver is actually deployed (M6) to switch to the real backend — no other
+ * call site changes. Note: the KI-Orb feature itself is currently disabled, see
+ * app/(tabs)/tree.tsx and app/_layout.tsx — this file is unreached dead code until then.
+ */
+export function getQuestGiverProvider(): QuestGiverProvider {
+  if (!instance) {
+    const backendUrl = process.env.EXPO_PUBLIC_LLM_BACKEND_URL;
+    instance = backendUrl ? new BackendQuestGiverProvider(backendUrl) : new MockQuestGiverProvider();
+  }
+  return instance;
+}
+</file>
+
+<file path="app/(tabs)/profile.tsx">
+import { useState } from 'react';
+import { Alert, Pressable, StyleSheet } from 'react-native';
+import { router } from 'expo-router';
+
+import { ThemedText } from '@/components/themed-text';
+import { ThemedView } from '@/components/themed-view';
+import { useThemeColor } from '@/hooks/use-theme-color';
+import { useActiveProjectId } from '@/hooks/use-active-project-id';
+import { importSkillTree, type ImportPayload } from '@/db/import-skill-tree';
+import shanghaiFixture from '@/fixtures/shanghai-semester.json';
+
+export default function ProfileScreen() {
+  const [, setActiveProjectId] = useActiveProjectId();
+  const [loading, setLoading] = useState(false);
+  const tint = useThemeColor({}, 'tint');
+  const tintText = useThemeColor({}, 'tintText');
+
+  const handleLoadFixture = async () => {
+    setLoading(true);
+    try {
+      const projectId = await importSkillTree(shanghaiFixture as ImportPayload);
+      setActiveProjectId(projectId);
+      router.push('/(tabs)/tree');
+    } catch (error) {
+      Alert.alert('Import fehlgeschlagen', error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <ThemedView style={styles.container}>
+      <ThemedText type="title">Profile</ThemedText>
+
+      <ThemedText type="defaultSemiBold" style={styles.sectionLabel}>
+        Debug-Tools
+      </ThemedText>
+      <Pressable
+        onPress={handleLoadFixture}
+        disabled={loading}
+        style={[styles.button, { backgroundColor: tint, opacity: loading ? 0.6 : 1 }]}>
+        <ThemedText style={[styles.buttonLabel, { color: tintText }]}>
+          {loading ? 'Lädt…' : 'Beispiel-Skilltree laden (Shanghai-Fixture)'}
+        </ThemedText>
+      </Pressable>
+    </ThemedView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    padding: 20,
+    paddingTop: 60,
+    gap: 8,
+  },
+  sectionLabel: { marginTop: 24 },
+  button: {
+    marginTop: 8,
+    paddingVertical: 14,
+    borderRadius: 14,
+    borderCurve: 'continuous',
+    alignItems: 'center',
+  },
+  buttonLabel: { fontWeight: '600', fontSize: 15 },
+});
+</file>
+
+<file path="constants/skill-tree-theme.ts">
+/**
+ * Central color palette for the skill-tree canvas (WoW talent-tree aesthetic).
+ * Tune the violet/gold tones here — nothing else in tree-canvas.tsx / node-glyph.tsx
+ * should hardcode a color.
+ */
+export const SkillTreeColors = {
+  background: '#1A1025',
+  /** Node title label — fixed, not theme-following: the canvas background never changes with
+   * light/dark mode, so text tied to the app theme's text color can end up near-invisible
+   * (e.g. light-mode's near-black text on this near-black purple). */
+  label: '#F3EDFB',
+
+  edge: {
+    inactive: '#4B5563',
+    active: '#FACC15',
+  },
+
+  node: {
+    background: '#150C22',
+    locked: {
+      border: '#6B7280',
+      opacity: 0.5,
+    },
+    available: {
+      border: '#C7CDD6',
+      opacity: 1,
+    },
+    mastered: {
+      border: '#FACC15',
+      opacity: 1,
+      glow: 'rgba(250, 204, 21, 0.55)',
+    },
+  },
+} as const;
 </file>
 
 <file path="db/import-skill-tree.ts">
@@ -7718,420 +8353,6 @@ export interface NodePrerequisite {
 }
 </file>
 
-<file path="domain/mastery.ts">
-import * as nodesRepo from '@/db/repositories/nodes-repo';
-import * as edgesRepo from '@/db/repositories/edges-repo';
-import { computeUnlocks, recomputeAllStates } from './unlock';
-
-/** Marks a node mastered and unlocks any direct children whose prerequisites are now all satisfied. */
-export async function markMastered(nodeId: string): Promise<string[]> {
-  const node = await nodesRepo.getNode(nodeId);
-  if (!node) throw new Error(`Node not found: ${nodeId}`);
-  if (node.state === 'mastered') return [];
-
-  await nodesRepo.setNodeState(nodeId, 'mastered');
-
-  const childIds = await edgesRepo.listDirectChildren(nodeId);
-  if (childIds.length === 0) return [];
-
-  const edges = await edgesRepo.listEdgesByProject(node.projectId);
-  const relevantEdges = edges
-    .filter((e) => childIds.includes(e.targetNodeId))
-    .map((e) => ({ sourceNodeId: e.sourceNodeId, targetNodeId: e.targetNodeId }));
-
-  const relevantNodeIds = new Set<string>([...childIds, ...relevantEdges.map((e) => e.sourceNodeId)]);
-  const relevantNodes = (
-    await Promise.all(Array.from(relevantNodeIds).map((id) => nodesRepo.getNode(id)))
-  ).filter((n): n is NonNullable<typeof n> => n !== null);
-
-  const unlockedIds = computeUnlocks(
-    relevantNodes.map((n) => ({ id: n.id, state: n.state })),
-    relevantEdges,
-    childIds
-  );
-
-  for (const id of unlockedIds) {
-    await nodesRepo.setNodeState(id, 'available');
-  }
-  return unlockedIds;
-}
-
-/** Un-masters a node and re-evaluates the whole project graph (rare debug/undo path). */
-export async function markUnmastered(projectId: string, nodeId: string): Promise<void> {
-  const [allNodes, allEdges] = await Promise.all([
-    nodesRepo.listNodesByProject(projectId),
-    edgesRepo.listEdgesByProject(projectId),
-  ]);
-
-  const masteredIds = new Set(
-    allNodes.filter((n) => n.state === 'mastered' && n.id !== nodeId).map((n) => n.id)
-  );
-
-  const recomputed = recomputeAllStates(
-    allNodes.map((n) => n.id),
-    allEdges.map((e) => ({ sourceNodeId: e.sourceNodeId, targetNodeId: e.targetNodeId })),
-    masteredIds
-  );
-
-  for (const node of allNodes) {
-    const nextState = recomputed.get(node.id);
-    if (nextState && nextState !== node.state) {
-      await nodesRepo.setNodeState(node.id, nextState);
-    }
-  }
-}
-
-/**
- * Re-evaluates every node's state from the DB's current mastered set — for the rare edit-time
- * path where a node's own prerequisites changed. Cascades exactly like markUnmastered, including
- * demoting an already-mastered node whose (edited) prerequisites are no longer all satisfied.
- */
-export async function reevaluateProjectGraph(projectId: string): Promise<void> {
-  const [allNodes, allEdges] = await Promise.all([
-    nodesRepo.listNodesByProject(projectId),
-    edgesRepo.listEdgesByProject(projectId),
-  ]);
-
-  const masteredIds = new Set(allNodes.filter((n) => n.state === 'mastered').map((n) => n.id));
-
-  const recomputed = recomputeAllStates(
-    allNodes.map((n) => n.id),
-    allEdges.map((e) => ({ sourceNodeId: e.sourceNodeId, targetNodeId: e.targetNodeId })),
-    masteredIds
-  );
-
-  for (const node of allNodes) {
-    const nextState = recomputed.get(node.id);
-    if (nextState && nextState !== node.state) {
-      await nodesRepo.setNodeState(node.id, nextState);
-    }
-  }
-}
-</file>
-
-<file path="CLAUDE.md">
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-@AGENTS.md
-
-This file is the source of truth. If code and this file disagree, treat the code as a bug to fix,
-not a reason to ignore this file — unless the divergence is the known Capstone/passive-bonus
-legacy called out in the migration note below.
-
-## Project
-
-Skill Tree — Expo/React Native (SDK 54) app that turns a goal into a dependency-gated tree of
-tasks. Nodes start `locked`/`available` and flip to `mastered`; mastering a node re-evaluates its
-direct children and unlocks the ones whose prerequisites are now all satisfied. Local-first: all
-state lives in on-device SQLite (`expo-sqlite`), no user accounts yet.
-
-Creating a project (`app/project/new.tsx`) with a meaningful title + goal description triggers a
-one-shot LLM call (`providers/tree-generator/`) that generates a full skill tree, persisted via
-`db/import-skill-tree.ts`. The older "KI-Orb" (AI orb, `providers/quest-giver/`) that suggested one
-next step at a time is **disabled bis auf Weiteres** — its entry points are commented out in
-`app/(tabs)/tree.tsx` and `app/_layout.tsx`, code otherwise left intact and reachable again by
-uncommenting those two spots.
-
-## Commands
-
-```bash
-npm run start          # expo start (Metro, pick platform interactively)
-npm run android        # expo start --android
-npm run ios            # expo start --ios
-npm run web            # expo start --web
-npm run lint           # expo lint (eslint-config-expo flat config)
-npm test               # jest (jest-expo preset)
-npx jest domain/unlock.test.ts          # single test file
-npx jest -t "resolves a diamond graph"  # single test by name
-npx tsc --noEmit       # typecheck (no dedicated script exists)
-```
-
-## Architecture — strict layering
-
-One-directional: `ui (app/, components/) -> viewmodel/ -> domain/ -> db/repositories/ -> db/client.ts`.
-Screens never write raw SQL; they call repositories or domain functions. Do not skip a layer.
-
-- **`db/schema.ts`** — migration runner keyed off `PRAGMA user_version`. Add a migration by
-  appending a SQL string to `MIGRATIONS` and bumping `SCHEMA_VERSION`; never edit a shipped one.
-- **`db/repositories/*`** — one file per table, maps `snake_case` rows to `camelCase` types from
-  `db/types.ts`. Only layer that touches `expo-sqlite`.
-- **`domain/unlock.ts`** — pure, DB-free graph logic. AND-only semantics: a node unlocks only when
-  *every* incoming edge points at a mastered node. Covered by `domain/unlock.test.ts` — extend
-  these tests directly when changing unlock semantics.
-- **`domain/mastery.ts`** — only place that mutates node state (`markMastered`, `markUnmastered`).
-- **`viewmodel/skill-tree-viewmodel.ts`** — renderer-agnostic `{ nodes, edges, loading, reload }`;
-  `components/skill-tree/tree-canvas.tsx` never touches the db directly. `layout.ts` computes tiers
-  by prerequisite depth at render time, not the stored `tier` column.
-
-### Gemini backend proxy (tree-generator, formerly KI-Orb)
-
-Three-layer indirection — no LLM vendor name leaks past the server boundary. Same pattern used by
-both the active tree-generator and the disabled quest-giver (KI-Orb):
-
-1. **`providers/tree-generator/`** — app-side contract for the one-shot full-tree generation.
-   `index.ts` is the one swap point: picks `MockTreeGeneratorProvider` (offline default) or
-   `BackendTreeGeneratorProvider` based on `EXPO_PUBLIC_LLM_BACKEND_URL`. Never call a concrete
-   provider from a screen directly. `providers/quest-giver/` is the same pattern for the disabled
-   single-step KI-Orb — dead code, left intact, shares the same env var.
-2. **`app/api/generate-tree+api.ts`** (active) / **`app/api/quest-giver+api.ts`** (dead code) —
-   server-only Expo Router API routes. Vendor-neutral body, string length caps, in-memory
-   per-process rate limit (no auth yet, so this is the only cost-abuse guard — read the comments
-   before touching limits).
-3. **`server/llm/`** — server-only vendor abstraction (`LlmClient`/`GeminiClient`,
-   `generateSkillTree`/`generateStructuredStep`). `LLM_PROVIDER`/`LLM_API_KEY`/`LLM_ENDPOINT` from
-   env. `LLM_API_KEY` stays server-only (never `EXPO_PUBLIC_` prefix), sent as a header, never a
-   query string. The system prompt used by `generateSkillTree` is currently a marked placeholder
-   (`TODO(user)` in `gemini-client.ts`) — the real prompt is still pending, not yet supplied.
-
-Preserve the vendor-neutral contract at each boundary — swapping the LLM vendor must stay confined
-to `server/llm/`.
-
-## Project scope & design — CURRENT RULES
-
-**Capstones and passive bonuses are cut.** The skill tree has exactly one node shape: **Task**
-(square). `NodeType` (`db/types.ts`) is `'task'` only — do not reintroduce an octagon/capstone or
-circle/passive-bonus variant, in the DB schema, the LLM contracts, or the renderer.
-
-- `db/schema.ts` migration 2 collapsed any pre-existing `'capstone'` rows to `'task'` and tightened
-  the `nodes.type` CHECK to `'task'` only — do not loosen it back.
-- Visual states for a Task node:
-  - `locked` — grey/matte, muted opacity, no animation.
-  - `available` — full color, pulsing (Reanimated `withRepeat`/`withSequence`).
-  - `mastered` — gold border with a glow effect (Reanimated), no pulse decay.
-- KI-Orb button (`components/orb/floating-orb.tsx`) uses the Liquid Glass effect
-  (`expo-glass-effect`, `GlassView` / `isLiquidGlassAvailable()`, falling back to `BlurView`) and
-  Apple SF Symbols via `IconSymbol` — currently unreachable, see the tree-generator note above.
-
-## Rendering technology — DO NOT CHANGE
-
-Skill tree rendering is **Views + `react-native-svg`** (connector lines only) **+ Reanimated v4**
-**+ `react-native-gesture-handler`** (pan/pinch on the canvas). This is a deliberate choice to keep
-native accessibility and haptics on plain Views.
-
-**Never introduce `react-native-skia`, WebGPU, or three.js** for the skill tree, in any PR, however
-small the ask.
-
-### CRITICAL: GestureHandlerRootView
-
-Any `GestureDetector` / `Gesture.Pan()` / `Gesture.Pinch()` usage crashes the app without a root
-wrapper. `app/_layout.tsx` already wraps the entire app in
-`<GestureHandlerRootView style={{ flex: 1 }}>` at the top, above `ThemeProvider` and the `Stack`.
-
-**Never remove this wrapper from `app/_layout.tsx`. Never move it down into an individual screen.**
-If a gesture crash appears, check this wrapper is still there and still at the root — don't add a
-second one somewhere else.
-
-## Env vars
-
-- `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_ENDPOINT` — server-only, read by `server/llm/index.ts`.
-- `EXPO_PUBLIC_LLM_BACKEND_URL` — client-visible; unset keeps the app on the offline mock provider
-  (used by both `providers/tree-generator/` and, if re-enabled, `providers/quest-giver/`).
-
-## Conventions
-
-- File names are kebab-case (`skill-tree-viewmodel.ts`, `node-form.tsx`), including components.
-- IDs are UUIDs via `db/uuid.ts`; timestamps are ISO strings, not epoch numbers.
-- Import via the `@/*` path alias, not relative `../../` chains.
-
-## Agent behavior / token efficiency
-
-RTK and Caveman run in the background for this user — always answer in Caveman style: short,
-dense, technical only, no filler. Code, commits, and PR text stay written normally (Caveman style
-applies to chat replies, not to file content).
-
-On API timeout or context overload: stop, don't keep guessing or retrying blind. Wait for the user
-to run `/compact` or `/clear`.
-</file>
-
-<file path="app/(tabs)/profile.tsx">
-import { useState } from 'react';
-import { Alert, Pressable, StyleSheet } from 'react-native';
-import { router } from 'expo-router';
-
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { useThemeColor } from '@/hooks/use-theme-color';
-import { useActiveProjectId } from '@/hooks/use-active-project-id';
-import { importSkillTree, type ImportPayload } from '@/db/import-skill-tree';
-import shanghaiFixture from '@/fixtures/shanghai-semester.json';
-
-export default function ProfileScreen() {
-  const [, setActiveProjectId] = useActiveProjectId();
-  const [loading, setLoading] = useState(false);
-  const tint = useThemeColor({}, 'tint');
-  const tintText = useThemeColor({}, 'tintText');
-
-  const handleLoadFixture = async () => {
-    setLoading(true);
-    try {
-      const projectId = await importSkillTree(shanghaiFixture as ImportPayload);
-      setActiveProjectId(projectId);
-      router.push('/(tabs)/tree');
-    } catch (error) {
-      Alert.alert('Import fehlgeschlagen', error instanceof Error ? error.message : String(error));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <ThemedView style={styles.container}>
-      <ThemedText type="title">Profile</ThemedText>
-
-      <ThemedText type="defaultSemiBold" style={styles.sectionLabel}>
-        Debug-Tools
-      </ThemedText>
-      <Pressable
-        onPress={handleLoadFixture}
-        disabled={loading}
-        style={[styles.button, { backgroundColor: tint, opacity: loading ? 0.6 : 1 }]}>
-        <ThemedText style={[styles.buttonLabel, { color: tintText }]}>
-          {loading ? 'Lädt…' : 'Beispiel-Skilltree laden (Shanghai-Fixture)'}
-        </ThemedText>
-      </Pressable>
-    </ThemedView>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    padding: 20,
-    paddingTop: 60,
-    gap: 8,
-  },
-  sectionLabel: { marginTop: 24 },
-  button: {
-    marginTop: 8,
-    paddingVertical: 14,
-    borderRadius: 14,
-    borderCurve: 'continuous',
-    alignItems: 'center',
-  },
-  buttonLabel: { fontWeight: '600', fontSize: 15 },
-});
-</file>
-
-<file path="app/node/new.tsx">
-import { useEffect, useState } from 'react';
-import { router } from 'expo-router';
-
-import { NodeForm, type NodeFormValues } from '@/components/skill-tree/node-form';
-import { ThemedView } from '@/components/themed-view';
-import { useActiveProjectId } from '@/hooks/use-active-project-id';
-import * as nodesRepo from '@/db/repositories/nodes-repo';
-import * as edgesRepo from '@/db/repositories/edges-repo';
-import { reduceRedundantPrerequisites, type UnlockEdge } from '@/domain/unlock';
-import type { SkillNode } from '@/db/types';
-
-export default function NewNodeScreen() {
-  const [activeProjectId] = useActiveProjectId();
-  const [existingNodes, setExistingNodes] = useState<SkillNode[]>([]);
-  const [existingEdges, setExistingEdges] = useState<UnlockEdge[]>([]);
-
-  useEffect(() => {
-    if (!activeProjectId) return;
-    nodesRepo.listNodesByProject(activeProjectId).then(setExistingNodes);
-    edgesRepo.listEdgesByProject(activeProjectId).then(setExistingEdges);
-  }, [activeProjectId]);
-
-  if (!activeProjectId) return <ThemedView style={{ flex: 1 }} />;
-
-  const handleSubmit = async (values: NodeFormValues) => {
-    // Defense-in-depth: the picker already keeps the selection reduced live, but re-check
-    // here too in case existingEdges was stale when the user submitted.
-    const prerequisiteIds = reduceRedundantPrerequisites(values.prerequisiteIds, existingEdges);
-    const node = await nodesRepo.createNode({
-      projectId: activeProjectId,
-      type: 'task',
-      title: values.title,
-      description: values.description,
-      icon: values.icon,
-      source: 'manual',
-      initialState: prerequisiteIds.length > 0 ? 'locked' : 'available',
-    });
-    if (prerequisiteIds.length > 0) {
-      await edgesRepo.setPrerequisites(activeProjectId, node.id, prerequisiteIds);
-    }
-    router.back();
-  };
-
-  return (
-    <NodeForm
-      candidatePrerequisites={existingNodes}
-      existingEdges={existingEdges}
-      submitLabel="Knoten anlegen"
-      onSubmit={handleSubmit}
-    />
-  );
-}
-</file>
-
-<file path="app/_layout.tsx">
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
-import { View, StyleSheet } from 'react-native';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import 'react-native-reanimated';
-
-import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useDatabaseReady } from '@/hooks/use-database-ready';
-
-export const unstable_settings = {
-  anchor: '(tabs)',
-};
-
-export default function RootLayout() {
-  const colorScheme = useColorScheme();
-  const dbReady = useDatabaseReady();
-
-  return (
-    <GestureHandlerRootView style={styles.root}>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        {!dbReady ? (
-          <View style={styles.root} />
-        ) : (
-          <>
-            <View style={styles.root}>
-              <Stack>
-                <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-                <Stack.Screen name="project/new" options={{ presentation: 'modal', title: 'Neues Projekt' }} />
-                <Stack.Screen name="project/[id]/edit" options={{ presentation: 'modal', title: 'Projekt bearbeiten' }} />
-                <Stack.Screen name="node/new" options={{ presentation: 'modal', title: 'Neuer Knoten' }} />
-                <Stack.Screen name="node/[id]/edit" options={{ presentation: 'modal', title: 'Knoten bearbeiten' }} />
-                {/* KI-Orb deaktiviert bis auf Weiteres — Ersatz: One-Shot Tree-Generierung bei Projekterstellung
-                <Stack.Screen
-                  name="quest-assist"
-                  options={{
-                    presentation: 'formSheet',
-                    sheetGrabberVisible: true,
-                    sheetAllowedDetents: [0.5, 0.9],
-                    contentStyle: { backgroundColor: 'transparent' },
-                    headerShown: false,
-                  }}
-                />
-                */}
-              </Stack>
-            </View>
-
-            <StatusBar style="auto" />
-          </>
-        )}
-      </ThemeProvider>
-    </GestureHandlerRootView>
-  );
-}
-
-const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-  },
-});
-</file>
-
 <file path="fixtures/shanghai-semester.json">
 {
   "schema_version": "1.0",
@@ -8389,178 +8610,388 @@ const styles = StyleSheet.create({
 });
 </file>
 
-<file path="components/skill-tree/tree-canvas.tsx">
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
-import Svg, { Line } from 'react-native-svg';
-
-import { NodeGlyph } from './node-glyph';
-import { computeLayout } from './layout';
-import { SkillTreeColors } from '@/constants/skill-tree-theme';
+<file path="components/skill-tree/layout.ts">
 import type { SkillNode } from '@/db/types';
-import type { EdgeVM } from '@/viewmodel/skill-tree-viewmodel';
 
-interface TreeCanvasProps {
-  nodes: SkillNode[];
-  edges: EdgeVM[];
-  onNodePress: (id: string) => void;
-  onNodeLongPress: (id: string) => void;
+export interface LayoutPosition {
+  x: number;
+  y: number;
 }
 
-const MIN_SCALE = 0.5;
-const MAX_SCALE = 2.5;
-const NODE_HALF_WIDTH = 42;
-const SHAPE_CENTER_OFFSET = 28;
-// Wheel deltaY is typically in the hundreds per notch — this keeps a single scroll tick
-// feeling like a small, controllable zoom step rather than an abrupt jump.
-const WHEEL_ZOOM_SENSITIVITY = 0.001;
-
-const EDGE_COLOR: Record<SkillNode['state'], string> = {
-  locked: SkillTreeColors.edge.inactive,
-  available: SkillTreeColors.edge.inactive,
-  mastered: SkillTreeColors.edge.active,
-};
-
-export function TreeCanvas({ nodes, edges, onNodePress, onNodeLongPress }: TreeCanvasProps) {
-  const { positions, width, height } = useMemo(() => computeLayout(nodes, edges), [nodes, edges]);
-  const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
-  // Reloading after an unrelated edit (e.g. saving a node's title) produces a new `nodes` array
-  // with the same members — recompute a signature of *which* nodes exist so the recenter effect
-  // below only reacts to an actual structural change (node added/removed), not every refetch.
-  const nodeIdSignature = useMemo(() => nodes.map((n) => n.id).sort().join(','), [nodes]);
-
-  const containerRef = useRef<View>(null);
-  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
-
-  const translateX = useSharedValue(0);
-  const translateY = useSharedValue(0);
-  const scale = useSharedValue(1);
-  const savedTranslateX = useSharedValue(0);
-  const savedTranslateY = useSharedValue(0);
-  const savedScale = useSharedValue(1);
-
-  const handleContainerLayout = (e: LayoutChangeEvent) => {
-    const { width: w, height: h } = e.nativeEvent.layout;
-    setContainerSize({ width: w, height: h });
-  };
-
-  // Keep the tree centered on first measurement, on container resize (e.g. desktop window
-  // resize), and when the set of nodes actually changes (switching project, adding/removing a
-  // node) — but NOT on every reload, so editing a node's title/description and saving leaves the
-  // user's manual pan/zoom exactly where it was instead of snapping back to center.
-  useEffect(() => {
-    if (containerSize.width === 0 || containerSize.height === 0) return;
-    const centerX = (containerSize.width - width) / 2;
-    const centerY = (containerSize.height - height) / 2;
-    translateX.value = centerX;
-    translateY.value = centerY;
-    savedTranslateX.value = centerX;
-    savedTranslateY.value = centerY;
-    scale.value = 1;
-    savedScale.value = 1;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- width/height intentionally excluded, see comment above
-  }, [containerSize.width, containerSize.height, nodeIdSignature, translateX, translateY, savedTranslateX, savedTranslateY, scale, savedScale]);
-
-  // Web/desktop: mouse wheel zooms in place of touch pinch — react-native-gesture-handler's
-  // Pan gesture already handles mouse click-drag for panning on web via pointer events, so wheel
-  // only needs to cover zoom.
-  useEffect(() => {
-    if (Platform.OS !== 'web') return;
-    const node = containerRef.current as unknown as HTMLElement | null;
-    if (!node) return;
-
-    const handleWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const next = savedScale.value * (1 - e.deltaY * WHEEL_ZOOM_SENSITIVITY);
-      const clamped = Math.min(MAX_SCALE, Math.max(MIN_SCALE, next));
-      scale.value = clamped;
-      savedScale.value = clamped;
-    };
-
-    node.addEventListener('wheel', handleWheel, { passive: false });
-    return () => node.removeEventListener('wheel', handleWheel);
-  }, [scale, savedScale]);
-
-  const panGesture = Gesture.Pan()
-    .onUpdate((e) => {
-      translateX.value = savedTranslateX.value + e.translationX;
-      translateY.value = savedTranslateY.value + e.translationY;
-    })
-    .onEnd(() => {
-      savedTranslateX.value = translateX.value;
-      savedTranslateY.value = translateY.value;
-    });
-
-  const pinchGesture = Gesture.Pinch()
-    .onUpdate((e) => {
-      const next = savedScale.value * e.scale;
-      scale.value = Math.min(MAX_SCALE, Math.max(MIN_SCALE, next));
-    })
-    .onEnd(() => {
-      savedScale.value = scale.value;
-    });
-
-  const composedGesture = Gesture.Simultaneous(panGesture, pinchGesture);
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: translateX.value }, { translateY: translateY.value }, { scale: scale.value }],
-  }));
-
-  return (
-    <View ref={containerRef} style={styles.container} onLayout={handleContainerLayout}>
-      <GestureDetector gesture={composedGesture}>
-        <Animated.View style={[{ width, height }, animatedStyle]}>
-          <Svg width={width} height={height} style={StyleSheet.absoluteFill}>
-            {edges.map((edge) => {
-              const from = positions.get(edge.sourceNodeId);
-              const to = positions.get(edge.targetNodeId);
-              const targetNode = nodeById.get(edge.targetNodeId);
-              if (!from || !to || !targetNode) return null;
-              const color = EDGE_COLOR[targetNode.state];
-              return (
-                <Line
-                  key={edge.id}
-                  x1={from.x}
-                  y1={from.y + SHAPE_CENTER_OFFSET}
-                  x2={to.x}
-                  y2={to.y + SHAPE_CENTER_OFFSET}
-                  stroke={color}
-                  strokeWidth={targetNode.state === 'mastered' ? 5 : 2}
-                  strokeOpacity={targetNode.state === 'mastered' ? 1 : 0.55}
-                />
-              );
-            })}
-          </Svg>
-
-          {nodes.map((node) => {
-            const pos = positions.get(node.id);
-            if (!pos) return null;
-            return (
-              <View
-                key={node.id}
-                style={[styles.nodeWrapper, { left: pos.x - NODE_HALF_WIDTH, top: pos.y - SHAPE_CENTER_OFFSET }]}>
-                <NodeGlyph
-                  title={node.title}
-                  icon={node.icon}
-                  state={node.state}
-                  onPress={() => onNodePress(node.id)}
-                  onLongPress={() => onNodeLongPress(node.id)}
-                />
-              </View>
-            );
-          })}
-        </Animated.View>
-      </GestureDetector>
-    </View>
-  );
+export interface LayoutResult {
+  positions: Map<string, LayoutPosition>;
+  /** Intermediate bend points for edges whose source/target tiers aren't adjacent, keyed by edge id. */
+  edgeWaypoints: Map<string, LayoutPosition[]>;
+  /** Safe label width per node — how wide its title can render without reaching into a
+      neighbor's column, given how much horizontal room that node actually has this layout. */
+  labelWidths: Map<string, number>;
+  width: number;
+  height: number;
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, overflow: 'hidden', backgroundColor: SkillTreeColors.background },
-  nodeWrapper: { position: 'absolute', width: 84, alignItems: 'center' },
-});
+interface LayoutEdge {
+  id: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+}
+
+/** Internal-only layered-graph entry — never a real node id when `isDummy` is true. */
+interface LayerColumnNode {
+  key: string;
+  isDummy: boolean;
+  sortKey: string;
+}
+
+const TIER_HEIGHT = 140;
+const NODE_SPACING = 100;
+const TOP_PADDING = 80;
+const SIDE_PADDING = 60;
+
+// Same default as the fixed 84px label column this replaces — dense tiers (neighbors exactly
+// NODE_SPACING apart) look identical to before. MAX caps how far an isolated node (or one at
+// the end of a sparse row) can stretch; LABEL_GUTTER is the breathing room kept clear on each
+// side so two neighbors that both max out their width still never touch.
+const MIN_LABEL_WIDTH = 84;
+const MAX_LABEL_WIDTH = 320;
+const LABEL_GUTTER = 16;
+
+const ORDERING_SWEEPS = 2; // barycenter down+up rounds; converges within a handful of sweeps
+const TRANSPOSE_MAX_PASSES = 4; // adjacent-swap crossing reduction; stops early once a pass helps nothing
+const ALIGNMENT_SWEEPS = 2; // median-alignment down+up rounds for coordinate assignment
+
+/**
+ * Depth-based tier layout: a node's row is 1 + max(prerequisite rows), so the tree
+ * always grows downward as dependency chains lengthen — independent of the stored
+ * `tier` hint, which only ever reflects what was true at creation time.
+ *
+ * A prerequisite edge can span more than one tier (e.g. a node with one shallow and one
+ * deep prerequisite). Drawing that edge as a single straight line would let it cross
+ * directly through an unrelated node sitting in an intermediate tier at the same column.
+ * To prevent that, every edge spanning >1 tier is split into a chain of dummy waypoint
+ * nodes — one per intermediate tier — so every segment spans exactly one tier and gets
+ * its own reserved column, never sharing a column with a real node.
+ *
+ * Beyond that, two more passes turn the raw layered graph into the clean, symmetric
+ * "diamond lattice" look (chains dead straight, multi-child/multi-parent nodes centered
+ * on their neighbors' mean position, no edge crossing another edge where avoidable):
+ * a transpose pass that actively swaps adjacent columns to remove crossings the
+ * barycenter ordering alone can't see, and a median-alignment pass that replaces rigid
+ * grid coordinates with positions pulled toward each node's neighbors' median x.
+ */
+export function computeLayout(nodes: SkillNode[], edges: LayoutEdge[]): LayoutResult {
+  const prereqsByTarget = new Map<string, string[]>();
+  for (const e of edges) {
+    if (!prereqsByTarget.has(e.targetNodeId)) prereqsByTarget.set(e.targetNodeId, []);
+    prereqsByTarget.get(e.targetNodeId)!.push(e.sourceNodeId);
+  }
+
+  const depthCache = new Map<string, number>();
+  function depthOf(id: string, visiting: Set<string>): number {
+    const cached = depthCache.get(id);
+    if (cached !== undefined) return cached;
+    if (visiting.has(id)) return 0; // cycle guard; acyclicity is enforced at write time
+
+    visiting.add(id);
+    const prereqs = prereqsByTarget.get(id) ?? [];
+    const depth = prereqs.length === 0 ? 0 : 1 + Math.max(...prereqs.map((p) => depthOf(p, visiting)));
+    visiting.delete(id);
+
+    depthCache.set(id, depth);
+    return depth;
+  }
+
+  const tiersExt = new Map<number, LayerColumnNode[]>();
+  function addToTier(tier: number, entry: LayerColumnNode) {
+    if (!tiersExt.has(tier)) tiersExt.set(tier, []);
+    tiersExt.get(tier)!.push(entry);
+  }
+
+  for (const node of nodes) {
+    const tier = depthOf(node.id, new Set());
+    addToTier(tier, { key: node.id, isDummy: false, sortKey: node.createdAt });
+  }
+
+  // Split every multi-tier edge into a chain of dummy waypoints, one per intermediate tier,
+  // so every segment (real->real, real->dummy, dummy->dummy, dummy->real) spans exactly one tier.
+  const predecessorsByKey = new Map<string, string[]>();
+  const chainsByEdge = new Map<string, string[]>();
+  function addPredecessor(key: string, predecessorKey: string) {
+    if (!predecessorsByKey.has(key)) predecessorsByKey.set(key, []);
+    predecessorsByKey.get(key)!.push(predecessorKey);
+  }
+
+  for (const edge of edges) {
+    const sourceTier = depthOf(edge.sourceNodeId, new Set());
+    const targetTier = depthOf(edge.targetNodeId, new Set());
+    if (targetTier - sourceTier <= 1) {
+      addPredecessor(edge.targetNodeId, edge.sourceNodeId);
+      chainsByEdge.set(edge.id, []);
+      continue;
+    }
+
+    const chain: string[] = [];
+    let prevKey = edge.sourceNodeId;
+    for (let tier = sourceTier + 1; tier <= targetTier - 1; tier++) {
+      const dummyKey = `dummy:${edge.id}:${tier}`;
+      addToTier(tier, { key: dummyKey, isDummy: true, sortKey: edge.id });
+      addPredecessor(dummyKey, prevKey);
+      prevKey = dummyKey;
+      chain.push(dummyKey);
+    }
+    addPredecessor(edge.targetNodeId, prevKey);
+    chainsByEdge.set(edge.id, chain);
+  }
+
+  const successorsByKey = new Map<string, string[]>();
+  for (const [key, preds] of predecessorsByKey) {
+    for (const pred of preds) {
+      if (!successorsByKey.has(pred)) successorsByKey.set(pred, []);
+      successorsByKey.get(pred)!.push(key);
+    }
+  }
+
+  const sortedTierKeys = Array.from(tiersExt.keys()).sort((a, b) => a - b);
+  const order = new Map<number, LayerColumnNode[]>();
+  for (const tier of sortedTierKeys) {
+    order.set(
+      tier,
+      tiersExt
+        .get(tier)!
+        .slice()
+        .sort((a, b) => a.sortKey.localeCompare(b.sortKey)),
+    );
+  }
+
+  const indexMaps = new Map<number, Map<string, number>>();
+  function rebuildIndex(tier: number) {
+    const m = new Map<string, number>();
+    order.get(tier)!.forEach((n, i) => m.set(n.key, i));
+    indexMaps.set(tier, m);
+  }
+  for (const tier of sortedTierKeys) rebuildIndex(tier);
+
+  function reorderTier(tier: number, neighborKeysOf: Map<string, string[]>, neighborIndex: Map<string, number>) {
+    const current = order.get(tier)!;
+    const currentIndex = indexMaps.get(tier)!;
+    const scored = current.map((n) => {
+      const neighborKeys = neighborKeysOf.get(n.key) ?? [];
+      const neighborIdxs = neighborKeys
+        .map((k) => neighborIndex.get(k))
+        .filter((v): v is number => v !== undefined);
+      const score = neighborIdxs.length
+        ? neighborIdxs.reduce((a, b) => a + b, 0) / neighborIdxs.length
+        : currentIndex.get(n.key)!;
+      return { n, score };
+    });
+    scored.sort((a, b) => a.score - b.score || a.n.sortKey.localeCompare(b.n.sortKey));
+    order.set(
+      tier,
+      scored.map((s) => s.n),
+    );
+    rebuildIndex(tier);
+  }
+
+  function downSweep() {
+    // tier[0] (the anchor/root row) is never reordered, matching today's createdAt-only ordering.
+    for (const tier of sortedTierKeys.slice(1)) {
+      reorderTier(tier, predecessorsByKey, indexMaps.get(tier - 1)!);
+    }
+  }
+
+  function upSweep() {
+    // The deepest tier has no successor row to reference, so it's left as downSweep set it.
+    for (const tier of sortedTierKeys.slice(1, -1).reverse()) {
+      reorderTier(tier, successorsByKey, indexMaps.get(tier + 1)!);
+    }
+  }
+
+  // Crossing count between two adjacent, already-ordered tiers: for every edge (source in
+  // tUpper, target in tLower), two edges cross iff their upper/lower column indices are
+  // inverted relative to each other. O(E^2) per boundary — fine at this app's scale.
+  function crossingsBetween(tUpper: number, tLower: number): number {
+    const upperIndex = indexMaps.get(tUpper)!;
+    const lowerIndex = indexMaps.get(tLower)!;
+    const pairs: Array<[number, number]> = [];
+    for (const n of order.get(tLower)!) {
+      for (const pred of predecessorsByKey.get(n.key) ?? []) {
+        const u = upperIndex.get(pred);
+        const l = lowerIndex.get(n.key);
+        if (u !== undefined && l !== undefined) pairs.push([u, l]);
+      }
+    }
+    let crossings = 0;
+    for (let i = 0; i < pairs.length; i++) {
+      for (let j = i + 1; j < pairs.length; j++) {
+        if ((pairs[i][0] - pairs[j][0]) * (pairs[i][1] - pairs[j][1]) < 0) crossings++;
+      }
+    }
+    return crossings;
+  }
+
+  function crossingsForTier(tier: number): number {
+    const tierIdx = sortedTierKeys.indexOf(tier);
+    let total = 0;
+    if (tierIdx > 0) total += crossingsBetween(sortedTierKeys[tierIdx - 1], tier);
+    if (tierIdx < sortedTierKeys.length - 1) total += crossingsBetween(tier, sortedTierKeys[tierIdx + 1]);
+    return total;
+  }
+
+  // Barycenter ordering alone can settle into an avoidable crossing (ties broken by sortKey
+  // have no idea about crossings). This local search fixes what's fixable by adjacent swaps —
+  // for the tree/occasional-diamond shape this app actually produces, that's every crossing;
+  // for adversarial dense many-to-many DAGs, minimizing crossings is NP-hard in general, so
+  // this only guarantees "no swap of two neighbors helps," not a global optimum.
+  function transposePass(): boolean {
+    let improved = false;
+    // Unlike the barycenter sweeps, tier0 has no predecessor tier to score against but it does
+    // have a tier1 to count crossings against — leaving it fixed can force an avoidable crossing
+    // whenever the arbitrary createdAt order happens to interleave badly with tier1's needs.
+    for (const tier of sortedTierKeys) {
+      const row = order.get(tier)!;
+      for (let i = 0; i < row.length - 1; i++) {
+        const before = crossingsForTier(tier);
+        [row[i], row[i + 1]] = [row[i + 1], row[i]];
+        rebuildIndex(tier);
+        const after = crossingsForTier(tier);
+        if (after < before) {
+          improved = true;
+        } else {
+          [row[i], row[i + 1]] = [row[i + 1], row[i]];
+          rebuildIndex(tier);
+        }
+      }
+    }
+    return improved;
+  }
+
+  for (let i = 0; i < ORDERING_SWEEPS; i++) {
+    downSweep();
+    upSweep();
+    transposePass();
+  }
+  for (let i = 0; i < TRANSPOSE_MAX_PASSES; i++) {
+    if (!transposePass()) break;
+  }
+  // Order is frozen from here on — nothing past this point may reorder a tier.
+
+  const maxColumns = Math.max(1, ...sortedTierKeys.map((t) => order.get(t)!.length));
+  const seedWidth = SIDE_PADDING * 2 + maxColumns * NODE_SPACING;
+  const x = new Map<string, number>();
+  sortedTierKeys.forEach((tier) => {
+    const row = order.get(tier)!;
+    const startX = (seedWidth - row.length * NODE_SPACING) / 2 + NODE_SPACING / 2;
+    row.forEach((n, i) => x.set(n.key, startX + i * NODE_SPACING));
+  });
+
+  function medianOf(values: number[]): number {
+    const sorted = values.slice().sort((a, b) => a - b);
+    const mid = Math.floor((sorted.length - 1) / 2);
+    return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid] + sorted[mid + 1]) / 2;
+  }
+
+  // Places nodes at their raw target x, preserving the tier's fixed order and a minimum gap
+  // of NODE_SPACING, while minimizing total displacement from the targets — this is isotonic
+  // regression via pool-adjacent-violators (substituting y_i = x_i - i*NODE_SPACING turns the
+  // min-gap constraint into "non-decreasing", the classic PAVA precondition). Unlike a naive
+  // greedy left-to-right clamp, this splits ties symmetrically instead of biasing everything
+  // rightward — e.g. two siblings both targeting the same x land evenly on either side of it,
+  // which is what makes a parent centered exactly between two children look right.
+  function resolveRow(targets: number[]): number[] {
+    const reduced = targets.map((t, i) => t - i * NODE_SPACING);
+    const blocks: { value: number; weight: number; count: number }[] = [];
+    for (const value of reduced) {
+      blocks.push({ value, weight: 1, count: 1 });
+      while (blocks.length > 1 && blocks[blocks.length - 2].value > blocks[blocks.length - 1].value) {
+        const b2 = blocks.pop()!;
+        const b1 = blocks.pop()!;
+        const weight = b1.weight + b2.weight;
+        blocks.push({ value: (b1.value * b1.weight + b2.value * b2.weight) / weight, weight, count: b1.count + b2.count });
+      }
+    }
+    const y: number[] = [];
+    for (const b of blocks) for (let k = 0; k < b.count; k++) y.push(b.value);
+    return y.map((v, i) => v + i * NODE_SPACING);
+  }
+
+  function alignPass(direction: 'down' | 'up') {
+    const tiers =
+      direction === 'down'
+        ? sortedTierKeys.slice(1) // tier0 has no predecessors to pull from
+        : sortedTierKeys.slice(0, -1).reverse(); // includes tier0 — a root must float toward its children's median
+    const neighborsOf = direction === 'down' ? predecessorsByKey : successorsByKey;
+
+    for (const tier of tiers) {
+      const row = order.get(tier)!;
+      const targets = row.map((n) => {
+        const neighborXs = (neighborsOf.get(n.key) ?? []).map((k) => x.get(k)).filter((v): v is number => v !== undefined);
+        return neighborXs.length ? medianOf(neighborXs) : x.get(n.key)!;
+      });
+      resolveRow(targets).forEach((v, i) => x.set(row[i].key, v));
+    }
+  }
+
+  for (let i = 0; i < ALIGNMENT_SWEEPS; i++) {
+    alignPass('down');
+    alignPass('up');
+  }
+
+  // Recenter/shrink-wrap from the actual coordinate extent rather than the column-count-based
+  // seed width, since alignment can widen (or narrow) an individual row past that estimate.
+  const allX = Array.from(x.values());
+  const minX = Math.min(...allX);
+  const maxX = Math.max(...allX);
+  const shift = SIDE_PADDING - minX;
+  for (const [key, value] of x) x.set(key, value + shift);
+  const width = Math.max(SIDE_PADDING * 2 + (maxX - minX), 320);
+
+  // A label only has to clear the nearest REAL neighbor in its own row — a dummy waypoint
+  // column has no rendered label of its own, so a title is free to stretch across it.
+  function realNeighborGap(row: LayerColumnNode[], index: number, direction: 1 | -1): number {
+    let i = index + direction;
+    while (i >= 0 && i < row.length) {
+      if (!row[i].isDummy) return Math.abs(x.get(row[i].key)! - x.get(row[index].key)!);
+      i += direction;
+    }
+    return Infinity;
+  }
+
+  const pixelPositions = new Map<string, LayoutPosition>();
+  const labelWidthsByKey = new Map<string, number>();
+  sortedTierKeys.forEach((tier, rowIndex) => {
+    const row = order.get(tier)!;
+    row.forEach((n, colIndex) => {
+      pixelPositions.set(n.key, { x: x.get(n.key)!, y: TOP_PADDING + rowIndex * TIER_HEIGHT });
+      if (n.isDummy) return;
+      // Both this node and its neighbor apply the same rule off the same shared gap, so each
+      // capping its width at (gap - GUTTER) still leaves GUTTER of clearance between the two
+      // boxes — no need to also halve it. At exactly the default NODE_SPACING (100) this
+      // resolves to exactly MIN_LABEL_WIDTH (84), matching today's fixed column exactly.
+      const available = Math.min(realNeighborGap(row, colIndex, -1), realNeighborGap(row, colIndex, 1)) - LABEL_GUTTER;
+      labelWidthsByKey.set(n.key, Math.min(MAX_LABEL_WIDTH, Math.max(MIN_LABEL_WIDTH, available)));
+    });
+  });
+
+  const positions = new Map<string, LayoutPosition>();
+  const labelWidths = new Map<string, number>();
+  for (const node of nodes) {
+    const p = pixelPositions.get(node.id);
+    if (p) positions.set(node.id, p);
+    const w = labelWidthsByKey.get(node.id);
+    if (w !== undefined) labelWidths.set(node.id, w);
+  }
+
+  const edgeWaypoints = new Map<string, LayoutPosition[]>();
+  for (const edge of edges) {
+    const chain = chainsByEdge.get(edge.id) ?? [];
+    edgeWaypoints.set(
+      edge.id,
+      chain.map((k) => pixelPositions.get(k)!),
+    );
+  }
+
+  const height = TOP_PADDING * 2 + sortedTierKeys.length * TIER_HEIGHT;
+  return { positions, edgeWaypoints, labelWidths, width, height: Math.max(height, 320) };
+}
 </file>
 
 <file path="domain/unlock.test.ts">
@@ -8715,6 +9146,422 @@ describe('recomputeAllStates', () => {
 });
 </file>
 
+<file path="providers/quest-giver/types.ts">
+export interface QuestGiverExistingNode {
+  id: string;
+  title: string;
+}
+
+export interface QuestGiverSuggestion {
+  title: string;
+  description?: string;
+  icon?: string;
+  type: 'task';
+  /** Ids (from QuestGiverInput.existingNodes) of steps that must be done before this one. */
+  prerequisiteNodeIds: string[];
+}
+
+export interface QuestGiverInput {
+  /** The project's own name — the only project-level context the Orb gets. */
+  projectTitle: string;
+  /** Already filtered to meaningful titles (see domain/title-quality.ts) before this is built. */
+  existingNodes: QuestGiverExistingNode[];
+}
+
+/**
+ * App-side contract. Never mentions an LLM vendor — implementations may be a local
+ * mock (MVP) or a call to our own generic backend endpoint (later milestone).
+ */
+export interface QuestGiverProvider {
+  suggestNextStep(input: QuestGiverInput): Promise<QuestGiverSuggestion>;
+}
+</file>
+
+<file path="CLAUDE.md">
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+@AGENTS.md
+
+This file is the source of truth. If code and this file disagree, treat the code as a bug to fix,
+not a reason to ignore this file — unless the divergence is the known Capstone/passive-bonus
+legacy called out in the migration note below.
+
+## Project
+
+Skill Tree — Expo/React Native (SDK 54) app that turns a goal into a dependency-gated tree of
+tasks. Nodes start `locked`/`available` and flip to `mastered`; mastering a node re-evaluates its
+direct children and unlocks the ones whose prerequisites are now all satisfied. Local-first: all
+state lives in on-device SQLite (`expo-sqlite`), no user accounts yet.
+
+Creating a project (`app/project/new.tsx`) with a meaningful title + goal description triggers a
+one-shot LLM call (`providers/tree-generator/`) that generates a full skill tree, persisted via
+`db/import-skill-tree.ts`. The older "KI-Orb" (AI orb, `providers/quest-giver/`) that suggested one
+next step at a time is **disabled bis auf Weiteres** — its entry points are commented out in
+`app/(tabs)/tree.tsx` and `app/_layout.tsx`, code otherwise left intact and reachable again by
+uncommenting those two spots.
+
+## Commands
+
+```bash
+npm run start          # expo start (Metro, pick platform interactively)
+npm run android        # expo start --android
+npm run ios            # expo start --ios
+npm run web            # expo start --web
+npm run lint           # expo lint (eslint-config-expo flat config)
+npm test               # jest (jest-expo preset)
+npx jest domain/unlock.test.ts          # single test file
+npx jest -t "resolves a diamond graph"  # single test by name
+npx tsc --noEmit       # typecheck (no dedicated script exists)
+```
+
+## Architecture — strict layering
+
+One-directional: `ui (app/, components/) -> viewmodel/ -> domain/ -> db/repositories/ -> db/client.ts`.
+Screens never write raw SQL; they call repositories or domain functions. Do not skip a layer.
+
+- **`db/schema.ts`** — migration runner keyed off `PRAGMA user_version`. Add a migration by
+  appending a SQL string to `MIGRATIONS` and bumping `SCHEMA_VERSION`; never edit a shipped one.
+- **`db/repositories/*`** — one file per table, maps `snake_case` rows to `camelCase` types from
+  `db/types.ts`. Only layer that touches `expo-sqlite`.
+- **`domain/unlock.ts`** — pure, DB-free graph logic. AND-only semantics: a node unlocks only when
+  *every* incoming edge points at a mastered node. Covered by `domain/unlock.test.ts` — extend
+  these tests directly when changing unlock semantics.
+- **`domain/mastery.ts`** — only place that mutates node state (`markMastered`, `markUnmastered`).
+- **`viewmodel/skill-tree-viewmodel.ts`** — renderer-agnostic `{ nodes, edges, loading, reload }`;
+  `components/skill-tree/tree-canvas.tsx` never touches the db directly. `layout.ts` computes tiers
+  by prerequisite depth at render time, not the stored `tier` column.
+
+### Gemini backend proxy (tree-generator, formerly KI-Orb)
+
+Three-layer indirection — no LLM vendor name leaks past the server boundary. Same pattern used by
+both the active tree-generator and the disabled quest-giver (KI-Orb):
+
+1. **`providers/tree-generator/`** — app-side contract for the one-shot full-tree generation.
+   `index.ts` is the one swap point: picks `MockTreeGeneratorProvider` (offline default) or
+   `BackendTreeGeneratorProvider` based on `EXPO_PUBLIC_LLM_BACKEND_URL`. Never call a concrete
+   provider from a screen directly. `providers/quest-giver/` is the same pattern for the disabled
+   single-step KI-Orb — dead code, left intact, shares the same env var.
+2. **`app/api/generate-tree+api.ts`** (active) / **`app/api/quest-giver+api.ts`** (dead code) —
+   server-only Expo Router API routes. Vendor-neutral body, string length caps, in-memory
+   per-process rate limit (no auth yet, so this is the only cost-abuse guard — read the comments
+   before touching limits).
+3. **`server/llm/`** — server-only vendor abstraction (`LlmClient`/`GeminiClient`,
+   `generateSkillTree`/`generateStructuredStep`). `LLM_PROVIDER`/`LLM_API_KEY`/`LLM_ENDPOINT` from
+   env. `LLM_API_KEY` stays server-only (never `EXPO_PUBLIC_` prefix), sent as a header, never a
+   query string. The system prompt used by `generateSkillTree` is supplied and de-gamified —
+   Baby-Step/cognitive-load decomposition, no RPG/quest/XP framing (`gemini-client.ts`).
+
+Preserve the vendor-neutral contract at each boundary — swapping the LLM vendor must stay confined
+to `server/llm/`.
+
+## Project scope & design — CURRENT RULES
+
+**Capstones and passive bonuses are cut.** The skill tree has exactly one node shape: **Task**
+(square). `NodeType` (`db/types.ts`) is `'task'` only — do not reintroduce an octagon/capstone or
+circle/passive-bonus variant, in the DB schema, the LLM contracts, or the renderer.
+
+- `db/schema.ts` migration 2 collapsed any pre-existing `'capstone'` rows to `'task'` and tightened
+  the `nodes.type` CHECK to `'task'` only — do not loosen it back.
+- Visual states for a Task node:
+  - `locked` — grey/matte, muted opacity, no animation.
+  - `available` — full color, pulsing (Reanimated `withRepeat`/`withSequence`).
+  - `mastered` — gold border with a glow effect (Reanimated), no pulse decay.
+- KI-Orb button (`components/orb/floating-orb.tsx`) uses the Liquid Glass effect
+  (`expo-glass-effect`, `GlassView` / `isLiquidGlassAvailable()`, falling back to `BlurView`) and
+  Apple SF Symbols via `IconSymbol` — currently unreachable, see the tree-generator note above.
+
+## Rendering technology — DO NOT CHANGE
+
+Skill tree rendering is **Views + `react-native-svg`** (connector lines only) **+ Reanimated v4**
+**+ `react-native-gesture-handler`** (pan/pinch on the canvas). This is a deliberate choice to keep
+native accessibility and haptics on plain Views.
+
+**Never introduce `react-native-skia`, WebGPU, or three.js** for the skill tree, in any PR, however
+small the ask.
+
+### CRITICAL: GestureHandlerRootView
+
+Any `GestureDetector` / `Gesture.Pan()` / `Gesture.Pinch()` usage crashes the app without a root
+wrapper. `app/_layout.tsx` already wraps the entire app in
+`<GestureHandlerRootView style={{ flex: 1 }}>` at the top, above `ThemeProvider` and the `Stack`.
+
+**Never remove this wrapper from `app/_layout.tsx`. Never move it down into an individual screen.**
+If a gesture crash appears, check this wrapper is still there and still at the root — don't add a
+second one somewhere else.
+
+## Env vars
+
+- `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_ENDPOINT` — server-only, read by `server/llm/index.ts`.
+- `EXPO_PUBLIC_LLM_BACKEND_URL` — client-visible; unset keeps the app on the offline mock provider
+  (used by both `providers/tree-generator/` and, if re-enabled, `providers/quest-giver/`).
+
+## Conventions
+
+- File names are kebab-case (`skill-tree-viewmodel.ts`, `node-form.tsx`), including components.
+- IDs are UUIDs via `db/uuid.ts`; timestamps are ISO strings, not epoch numbers.
+- Import via the `@/*` path alias, not relative `../../` chains.
+
+## Agent behavior / token efficiency
+
+RTK and Caveman run in the background for this user — always answer in Caveman style: short,
+dense, technical only, no filler. Code, commits, and PR text stay written normally (Caveman style
+applies to chat replies, not to file content).
+
+On API timeout or context overload: stop, don't keep guessing or retrying blind. Wait for the user
+to run `/compact` or `/clear`.
+</file>
+
+<file path="app/node/new.tsx">
+import { useEffect, useState } from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
+import { router, useLocalSearchParams } from 'expo-router';
+
+import { NodeForm, type NodeFormValues } from '@/components/skill-tree/node-form';
+import { ThemedText } from '@/components/themed-text';
+import { ThemedView } from '@/components/themed-view';
+import { IconSymbol } from '@/components/ui/icon-symbol';
+import { useThemeColor } from '@/hooks/use-theme-color';
+import { useActiveProjectId } from '@/hooks/use-active-project-id';
+import * as nodesRepo from '@/db/repositories/nodes-repo';
+import * as edgesRepo from '@/db/repositories/edges-repo';
+import { computeDepths, reduceRedundantPrerequisites, type UnlockEdge } from '@/domain/unlock';
+import { reevaluateProjectGraph } from '@/domain/mastery';
+import type { SkillNode } from '@/db/types';
+
+interface PendingReroute {
+  newNodeId: string;
+  successors: SkillNode[];
+}
+
+export default function NewNodeScreen() {
+  const [activeProjectId] = useActiveProjectId();
+  const { anchorNodeId, insertMode } = useLocalSearchParams<{ anchorNodeId?: string; insertMode?: string }>();
+  const [existingNodes, setExistingNodes] = useState<SkillNode[]>([]);
+  const [existingEdges, setExistingEdges] = useState<UnlockEdge[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [pendingReroute, setPendingReroute] = useState<PendingReroute | null>(null);
+  const [checkedSuccessorIds, setCheckedSuccessorIds] = useState<string[]>([]);
+  const tint = useThemeColor({}, 'tint');
+  const textColor = useThemeColor({}, 'text');
+  const tintText = useThemeColor({}, 'tintText');
+
+  useEffect(() => {
+    if (!activeProjectId) return;
+    (async () => {
+      const [nodesList, edgesList] = await Promise.all([
+        nodesRepo.listNodesByProject(activeProjectId),
+        edgesRepo.listEdgesByProject(activeProjectId),
+      ]);
+      // Both must land before <NodeForm> mounts — it only reads `initialValues` once, at mount,
+      // and the "insert before" prefill below depends on `existingEdges` already being loaded.
+      setExistingNodes(nodesList);
+      setExistingEdges(edgesList);
+      setLoaded(true);
+    })();
+  }, [activeProjectId]);
+
+  if (!activeProjectId || !loaded) return <ThemedView style={{ flex: 1 }} />;
+
+  // "Danach einfügen" (or the plain "+" button, no anchor at all): the new node simply depends on
+  // the anchor. "Davor einfügen": the new node slots between the anchor and whatever it currently
+  // depends on, so it inherits the anchor's *current* prerequisites instead.
+  const prefilledPrerequisiteIds =
+    insertMode === 'before' && anchorNodeId
+      ? existingEdges.filter((e) => e.targetNodeId === anchorNodeId).map((e) => e.sourceNodeId)
+      : anchorNodeId
+        ? [anchorNodeId]
+        : [];
+
+  const handleSubmit = async (values: NodeFormValues) => {
+    // Defense-in-depth: the picker already keeps the selection reduced live, but re-check
+    // here too in case existingEdges was stale when the user submitted.
+    const prerequisiteIds = reduceRedundantPrerequisites(values.prerequisiteIds, existingEdges);
+    const node = await nodesRepo.createNode({
+      projectId: activeProjectId,
+      type: 'task',
+      title: values.title,
+      description: values.description,
+      icon: values.icon,
+      source: 'manual',
+      initialState: prerequisiteIds.length > 0 ? 'locked' : 'available',
+    });
+    if (prerequisiteIds.length > 0) {
+      await edgesRepo.setPrerequisites(activeProjectId, node.id, prerequisiteIds);
+    }
+
+    if (insertMode === 'before' && anchorNodeId) {
+      // Splice: the anchor's old dependency path now runs through the new node — whatever the
+      // user did or didn't keep checked above only affects what the *new* node depends on, the
+      // anchor unconditionally ends up depending solely on it. That's the definition of "before".
+      await edgesRepo.setPrerequisites(activeProjectId, anchorNodeId, [node.id]);
+      // The anchor may have been available/mastered; it can now have an unmet prerequisite
+      // (the brand-new, never-mastered node), so its state needs a full cascade recompute.
+      await reevaluateProjectGraph(activeProjectId);
+    }
+
+    if (insertMode === 'after' && anchorNodeId) {
+      // Always ask — including (especially) when the anchor is a chain-end with nothing directly
+      // downstream: the new node can still become a prerequisite for any other node in a deeper
+      // tier, not just the anchor's own descendants. Only nodes strictly deeper than the anchor
+      // qualify — anything at the same or a shallower tier is excluded, which also rules out
+      // cycles for free (an ancestor of the anchor always has a smaller depth, see computeDepths).
+      const depths = computeDepths(existingNodes.map((n) => n.id), existingEdges);
+      const anchorDepth = depths.get(anchorNodeId) ?? 0;
+      const candidates = existingNodes.filter((n) => (depths.get(n.id) ?? 0) > anchorDepth);
+      setPendingReroute({ newNodeId: node.id, successors: candidates });
+      return;
+    }
+
+    router.back();
+  };
+
+  const toggleSuccessor = (id: string) => {
+    setCheckedSuccessorIds((prev) => (prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]));
+  };
+
+  const allSuccessorsChecked =
+    pendingReroute !== null && pendingReroute.successors.every((s) => checkedSuccessorIds.includes(s.id));
+
+  const toggleAllSuccessors = () => {
+    if (!pendingReroute) return;
+    setCheckedSuccessorIds(allSuccessorsChecked ? [] : pendingReroute.successors.map((s) => s.id));
+  };
+
+  const handleConfirmReroute = async () => {
+    if (!pendingReroute || !activeProjectId) return;
+    for (const successor of pendingReroute.successors) {
+      if (!checkedSuccessorIds.includes(successor.id)) continue;
+      // Swap only the one anchor→successor edge — a successor with other prerequisites too
+      // (a diamond merge) keeps them; this isn't a blanket replace like the "before" splice is.
+      const currentPrereqs = existingEdges.filter((e) => e.targetNodeId === successor.id).map((e) => e.sourceNodeId);
+      const nextPrereqs = currentPrereqs.filter((id) => id !== anchorNodeId).concat(pendingReroute.newNodeId);
+      await edgesRepo.setPrerequisites(activeProjectId, successor.id, nextPrereqs);
+    }
+    // A rerouted successor may have been available/mastered and can now have an unmet
+    // prerequisite (the brand-new node), so its state needs a full cascade recompute.
+    await reevaluateProjectGraph(activeProjectId);
+    router.back();
+  };
+
+  if (pendingReroute) {
+    return (
+      <ThemedView style={styles.rerouteContainer}>
+        <ThemedText type="defaultSemiBold">Voraussetzung für:</ThemedText>
+        <Pressable onPress={toggleAllSuccessors} style={styles.rerouteSelectAll}>
+          <IconSymbol
+            name={allSuccessorsChecked ? 'checkmark.circle.fill' : 'questionmark.circle'}
+            size={20}
+            color={allSuccessorsChecked ? tint : textColor}
+          />
+          <ThemedText>Alle Nachfolgeknoten</ThemedText>
+        </Pressable>
+        <View style={styles.rerouteRow}>
+          {pendingReroute.successors.map((s) => (
+            <Pressable key={s.id} onPress={() => toggleSuccessor(s.id)} style={styles.rerouteItem}>
+              <IconSymbol
+                name={checkedSuccessorIds.includes(s.id) ? 'checkmark.circle.fill' : 'questionmark.circle'}
+                size={22}
+                color={checkedSuccessorIds.includes(s.id) ? tint : textColor}
+              />
+              <ThemedText style={styles.rerouteLabel} numberOfLines={2}>
+                {s.title}
+              </ThemedText>
+            </Pressable>
+          ))}
+        </View>
+        <Pressable onPress={handleConfirmReroute} style={[styles.rerouteButton, { backgroundColor: tint }]}>
+          <ThemedText style={[styles.rerouteButtonLabel, { color: tintText }]}>Fertig</ThemedText>
+        </Pressable>
+      </ThemedView>
+    );
+  }
+
+  return (
+    <NodeForm
+      candidatePrerequisites={[]}
+      existingEdges={existingEdges}
+      initialValues={{ title: '', description: '', icon: null, prerequisiteIds: prefilledPrerequisiteIds }}
+      primaryAction={{ label: 'Knoten anlegen', onPress: handleSubmit }}
+    />
+  );
+}
+
+const styles = StyleSheet.create({
+  rerouteContainer: { flex: 1, padding: 20, gap: 16 },
+  rerouteSelectAll: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  rerouteRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
+  rerouteItem: { width: 84, alignItems: 'center', gap: 4 },
+  rerouteLabel: { fontSize: 13, textAlign: 'center' },
+  rerouteButton: { marginTop: 12, paddingVertical: 14, borderRadius: 14, borderCurve: 'continuous', alignItems: 'center' },
+  rerouteButtonLabel: { fontWeight: '600', fontSize: 16 },
+});
+</file>
+
+<file path="app/_layout.tsx">
+import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { Stack } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
+import { View, StyleSheet } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import 'react-native-reanimated';
+
+import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useDatabaseReady } from '@/hooks/use-database-ready';
+
+export const unstable_settings = {
+  anchor: '(tabs)',
+};
+
+export default function RootLayout() {
+  const colorScheme = useColorScheme();
+  const dbReady = useDatabaseReady();
+
+  return (
+    <GestureHandlerRootView style={styles.root}>
+      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+        {!dbReady ? (
+          <View style={styles.root} />
+        ) : (
+          <>
+            <View style={styles.root}>
+              <Stack>
+                <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                <Stack.Screen name="project/new" options={{ presentation: 'modal', title: 'Neues Projekt' }} />
+                <Stack.Screen name="project/[id]/edit" options={{ presentation: 'modal', title: 'Projekt bearbeiten' }} />
+                <Stack.Screen name="node/new" options={{ presentation: 'modal', title: 'Neuer Knoten' }} />
+                <Stack.Screen name="node/[id]/edit" options={{ presentation: 'modal', title: '' }} />
+                {/* KI-Orb deaktiviert bis auf Weiteres — Ersatz: One-Shot Tree-Generierung bei Projekterstellung
+                <Stack.Screen
+                  name="quest-assist"
+                  options={{
+                    presentation: 'formSheet',
+                    sheetGrabberVisible: true,
+                    sheetAllowedDetents: [0.5, 0.9],
+                    contentStyle: { backgroundColor: 'transparent' },
+                    headerShown: false,
+                  }}
+                />
+                */}
+              </Stack>
+            </View>
+
+            <StatusBar hidden />
+          </>
+        )}
+      </ThemeProvider>
+    </GestureHandlerRootView>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+  },
+});
+</file>
+
 <file path="domain/unlock.ts">
 import type { NodeState } from '@/db/types';
 
@@ -8760,7 +9607,12 @@ export function directChildren(edges: UnlockEdge[], sourceNodeId: string): strin
   return Array.from(new Set(edges.filter((e) => e.sourceNodeId === sourceNodeId).map((e) => e.targetNodeId)));
 }
 
-function transitiveAncestorsOf(id: string, prereqsByTarget: Map<string, string[]>): Set<string> {
+/**
+ * All nodes transitively required by (prerequisites of) `id` — the mirror image of
+ * `transitiveDescendantsOf`. Picking one of these as a *dependent* of `id` would create a cycle.
+ */
+export function transitiveAncestorsOf(id: string, edges: UnlockEdge[]): Set<string> {
+  const prereqsByTarget = groupPrereqsByTarget(edges);
   const ancestors = new Set<string>();
   const stack = [...(prereqsByTarget.get(id) ?? [])];
   while (stack.length > 0) {
@@ -8779,9 +9631,8 @@ function transitiveAncestorsOf(id: string, prereqsByTarget: Map<string, string[]
  * graph (the new node being created isn't part of it yet).
  */
 export function reduceRedundantPrerequisites(selectedIds: string[], edges: UnlockEdge[]): string[] {
-  const prereqsByTarget = groupPrereqsByTarget(edges);
   return selectedIds.filter(
-    (id) => !selectedIds.some((other) => other !== id && transitiveAncestorsOf(other, prereqsByTarget).has(id))
+    (id) => !selectedIds.some((other) => other !== id && transitiveAncestorsOf(other, edges).has(id))
   );
 }
 
@@ -8810,6 +9661,34 @@ export function transitiveDescendantsOf(id: string, edges: UnlockEdge[]): Set<st
     stack.push(...(childrenBySource.get(current) ?? []));
   }
   return descendants;
+}
+
+/**
+ * A node's tier: 0 if it has no prerequisites, else 1 + max(prerequisite depths) — same
+ * definition `layout.ts` uses for rendering. Any ancestor of `id` always has a strictly smaller
+ * depth than `id` (depth increases by at least 1 along every prerequisite edge), so filtering
+ * candidates by `depth(candidate) > depth(id)` also rules out cycles for free.
+ */
+export function computeDepths(nodeIds: string[], edges: UnlockEdge[]): Map<string, number> {
+  const prereqsByTarget = groupPrereqsByTarget(edges);
+  const depths = new Map<string, number>();
+
+  function depthOf(id: string, visiting: Set<string>): number {
+    const cached = depths.get(id);
+    if (cached !== undefined) return cached;
+    if (visiting.has(id)) return 0; // cycle guard; acyclicity is enforced at write time
+
+    visiting.add(id);
+    const prereqs = prereqsByTarget.get(id) ?? [];
+    const depth = prereqs.length === 0 ? 0 : 1 + Math.max(...prereqs.map((p) => depthOf(p, visiting)));
+    visiting.delete(id);
+
+    depths.set(id, depth);
+    return depth;
+  }
+
+  for (const id of nodeIds) depthOf(id, new Set());
+  return depths;
 }
 
 /**
@@ -8857,195 +9736,6 @@ export function recomputeAllStates(
   }
   return result;
 }
-</file>
-
-<file path="providers/quest-giver/types.ts">
-export interface QuestGiverExistingNode {
-  id: string;
-  title: string;
-}
-
-export interface QuestGiverSuggestion {
-  title: string;
-  description?: string;
-  icon?: string;
-  type: 'task';
-  /** Ids (from QuestGiverInput.existingNodes) of steps that must be done before this one. */
-  prerequisiteNodeIds: string[];
-}
-
-export interface QuestGiverInput {
-  /** The project's own name — the only project-level context the Orb gets. */
-  projectTitle: string;
-  /** Already filtered to meaningful titles (see domain/title-quality.ts) before this is built. */
-  existingNodes: QuestGiverExistingNode[];
-}
-
-/**
- * App-side contract. Never mentions an LLM vendor — implementations may be a local
- * mock (MVP) or a call to our own generic backend endpoint (later milestone).
- */
-export interface QuestGiverProvider {
-  suggestNextStep(input: QuestGiverInput): Promise<QuestGiverSuggestion>;
-}
-</file>
-
-<file path="server/llm/types.ts">
-export interface LlmExistingNode {
-  id: string;
-  title: string;
-}
-
-export interface LlmStructuredStep {
-  title: string;
-  description?: string;
-  icon?: string;
-  type: 'task';
-  /** Ids (from LlmPrompt.existingNodes) of steps that must be done before this one. */
-  prerequisiteNodeIds: string[];
-}
-
-export interface LlmPrompt {
-  projectTitle: string;
-  existingNodes: LlmExistingNode[];
-}
-
-export interface LlmTreePrompt {
-  projectTitle: string;
-  goalDescription: string;
-}
-
-export interface LlmGeneratedNode {
-  /** Scoped to this response only — never a real DB id. Used to resolve edges below. */
-  id: string;
-  title: string;
-  description?: string;
-  icon?: string;
-}
-
-export interface LlmGeneratedEdge {
-  from: string;
-  to: string;
-}
-
-export interface LlmGeneratedTree {
-  nodes: LlmGeneratedNode[];
-  edges: LlmGeneratedEdge[];
-}
-
-/** Backend-internal vendor abstraction — the app client never sees this. */
-export interface LlmClient {
-  generateStructuredStep(prompt: LlmPrompt): Promise<LlmStructuredStep>;
-  generateSkillTree(prompt: LlmTreePrompt): Promise<LlmGeneratedTree>;
-}
-</file>
-
-<file path="app/(tabs)/tree.tsx">
-import { Pressable, StyleSheet, View } from 'react-native';
-import { router, useFocusEffect } from 'expo-router';
-import { useCallback } from 'react';
-
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { TreeCanvas } from '@/components/skill-tree/tree-canvas';
-// KI-Orb deaktiviert bis auf Weiteres — Ersatz: One-Shot Tree-Generierung bei Projekterstellung
-// import { FloatingOrb } from '@/components/orb/floating-orb';
-import { useThemeColor } from '@/hooks/use-theme-color';
-import { useActiveProjectId } from '@/hooks/use-active-project-id';
-import { useSkillTreeViewModel } from '@/viewmodel/skill-tree-viewmodel';
-import { markMastered, markUnmastered } from '@/domain/mastery';
-import { SkillTreeColors } from '@/constants/skill-tree-theme';
-
-export default function TreeScreen() {
-  const [activeProjectId] = useActiveProjectId();
-  const { nodes, edges, loading, reload } = useSkillTreeViewModel(activeProjectId);
-  const tint = useThemeColor({}, 'tint');
-
-  useFocusEffect(
-    useCallback(() => {
-      reload();
-    }, [reload])
-  );
-
-  const handleToggleMastery = async (id: string) => {
-    if (!activeProjectId) return;
-    const node = nodes.find((n) => n.id === id);
-    if (!node) return;
-
-    if (node.state === 'mastered') {
-      await markUnmastered(activeProjectId, id);
-    } else if (node.state === 'available') {
-      await markMastered(id);
-    }
-    reload();
-  };
-
-  if (!activeProjectId) {
-    return (
-      <ThemedView style={styles.container}>
-        <ThemedText type="title" style={styles.title}>
-          Tree
-        </ThemedText>
-        <ThemedText style={styles.empty}>
-          Kein aktives Projekt. Wähle im Projects-Tab ein Projekt aus.
-        </ThemedText>
-      </ThemedView>
-    );
-  }
-
-  return (
-    <ThemedView style={styles.container}>
-      <View style={styles.header}>
-        <ThemedText type="title">Tree</ThemedText>
-        <Pressable onPress={() => router.push('/node/new')} hitSlop={8}>
-          <IconSymbol name="plus.circle.fill" size={30} color={tint} />
-        </Pressable>
-      </View>
-
-      {!loading && nodes.length === 0 ? (
-        <ThemedText style={styles.empty}>
-          Noch keine Knoten. Tippe auf + um deinen ersten Schritt anzulegen.
-        </ThemedText>
-      ) : (
-        <View style={styles.canvasBackground}>
-          <TreeCanvas
-            nodes={nodes}
-            edges={edges}
-            onNodePress={handleToggleMastery}
-            onNodeLongPress={(id) => router.push(`/node/${id}/edit`)}
-          />
-        </View>
-      )}
-
-      {/* KI-Orb deaktiviert bis auf Weiteres — Ersatz: One-Shot Tree-Generierung bei Projekterstellung
-      <View pointerEvents="box-none" style={styles.orbLayer}>
-        <FloatingOrb />
-      </View>
-      */}
-    </ThemedView>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: { flex: 1, paddingTop: 60 },
-  canvasBackground: { flex: 1, backgroundColor: SkillTreeColors.background },
-  orbLayer: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    paddingBottom: 24,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    marginBottom: 12,
-  },
-  title: { paddingHorizontal: 20 },
-  empty: { opacity: 0.6, marginTop: 20, paddingHorizontal: 20 },
-});
 </file>
 
 <file path="providers/quest-giver/mock-provider.ts">
@@ -9106,9 +9796,494 @@ export class MockQuestGiverProvider implements QuestGiverProvider {
 }
 </file>
 
+<file path="server/llm/types.ts">
+export interface LlmExistingNode {
+  id: string;
+  title: string;
+}
+
+export interface LlmStructuredStep {
+  title: string;
+  description?: string;
+  icon?: string;
+  type: 'task';
+  /** Ids (from LlmPrompt.existingNodes) of steps that must be done before this one. */
+  prerequisiteNodeIds: string[];
+}
+
+export interface LlmPrompt {
+  projectTitle: string;
+  existingNodes: LlmExistingNode[];
+}
+
+export interface LlmAudio {
+  base64: string;
+  mimeType: string;
+}
+
+export interface LlmTreePrompt {
+  projectTitle: string;
+  goalDescription: string;
+}
+
+export interface LlmGeneratedNode {
+  /** Scoped to this response only — never a real DB id. Used to resolve edges below. */
+  id: string;
+  title: string;
+  description?: string;
+  icon?: string;
+}
+
+export interface LlmGeneratedEdge {
+  from: string;
+  to: string;
+}
+
+export interface LlmGeneratedTree {
+  nodes: LlmGeneratedNode[];
+  edges: LlmGeneratedEdge[];
+}
+
+/** Backend-internal vendor abstraction — the app client never sees this. */
+export interface LlmClient {
+  generateStructuredStep(prompt: LlmPrompt): Promise<LlmStructuredStep>;
+  generateSkillTree(prompt: LlmTreePrompt): Promise<LlmGeneratedTree>;
+  transcribeAudio(input: { audio: LlmAudio }): Promise<{ text: string }>;
+}
+</file>
+
+<file path="components/skill-tree/node-form.tsx">
+import { useEffect, useRef, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+
+import { ThemedText } from '@/components/themed-text';
+import { IconSymbol } from '@/components/ui/icon-symbol';
+import { SkillIcon } from '@/components/icons/skill-icon';
+import { IconPickerModal } from '@/components/icons/icon-picker-modal';
+import { useThemeColor } from '@/hooks/use-theme-color';
+import { reduceRedundantPrerequisites, type UnlockEdge } from '@/domain/unlock';
+import type { SkillNode } from '@/db/types';
+
+export interface NodeFormValues {
+  title: string;
+  description: string;
+  icon: string | null;
+  prerequisiteIds: string[];
+}
+
+interface NodeFormPrimaryAction {
+  label: string;
+  onPress: (values: NodeFormValues) => void | Promise<void>;
+  /** Extra condition beyond "title is non-empty" — e.g. the edit flow disables "Erledigt"
+      while the node is still locked. */
+  disabled?: boolean;
+}
+
+interface NodeFormProps {
+  candidatePrerequisites: SkillNode[];
+  /** The project's existing prerequisite edges — used to auto-drop a selection that's already
+      implied transitively by another one (e.g. picking a tier-3 node makes its tier-1 ancestor
+      redundant to also pick directly). */
+  existingEdges?: UnlockEdge[];
+  /** Pre-fills the form for editing an existing node; omit for the create flow. */
+  initialValues?: NodeFormValues;
+  /** Fires on every field change (title/description blur, icon pick) so the caller can persist
+      immediately. Omit for the create flow — there's no node yet to save into. */
+  onAutosave?: (values: NodeFormValues) => void | Promise<void>;
+  /** Bottom-of-form action button, e.g. "Knoten anlegen" (create) or "Erledigt" (edit). Omit to
+      render no primary button at all. */
+  primaryAction?: NodeFormPrimaryAction;
+  /** Shows a plain red "Löschen" text button below the primary action; omit for the create flow. */
+  onDelete?: () => void;
+}
+
+export function NodeForm({
+  candidatePrerequisites,
+  existingEdges = [],
+  initialValues,
+  onAutosave,
+  primaryAction,
+  onDelete,
+}: NodeFormProps) {
+  const [title, setTitle] = useState(initialValues?.title ?? '');
+  const [description, setDescription] = useState(initialValues?.description ?? '');
+  const [icon, setIcon] = useState<string | null>(initialValues?.icon ?? null);
+  const [pickerVisible, setPickerVisible] = useState(false);
+  const [prerequisiteIds, setPrerequisiteIds] = useState<string[]>(initialValues?.prerequisiteIds ?? []);
+  const [submitting, setSubmitting] = useState(false);
+  // A long single-line title otherwise renders scrolled to the caret (end of text) before the
+  // field is ever focused — this pins the visible window to the start until the user taps in,
+  // at which point native cursor behavior takes back over.
+  const [titleSelection, setTitleSelection] = useState<{ start: number; end: number } | undefined>({
+    start: 0,
+    end: 0,
+  });
+
+  const textColor = useThemeColor({}, 'text');
+  const tint = useThemeColor({}, 'tint');
+  const tintText = useThemeColor({}, 'tintText');
+  const borderColor = useThemeColor({ light: '#E0E0E0', dark: '#333' }, 'text');
+
+  const canSubmit = title.trim().length > 0 && !submitting && !primaryAction?.disabled;
+
+  const toggle = (id: string) => {
+    setPrerequisiteIds((prev) => {
+      const next = prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id];
+      return reduceRedundantPrerequisites(next, existingEdges);
+    });
+  };
+
+  const currentValues = (patch: Partial<NodeFormValues> = {}): NodeFormValues => ({
+    title: title.trim(),
+    description: description.trim(),
+    icon,
+    prerequisiteIds,
+    ...patch,
+  });
+
+  const handleBlurAutosave = () => {
+    if (!title.trim()) return;
+    onAutosave?.(currentValues());
+  };
+
+  // Leaving the screen (back-swipe, hardware back) unmounts this component without necessarily
+  // blurring whichever field was last focused first — react-native-screens doesn't guarantee a
+  // blur fires on teardown. Mirroring the latest values into a ref every render (instead of
+  // relying on the effect's own stale closure) lets a one-time unmount cleanup flush whatever was
+  // last typed, so leaving by any route is as safe as blurring the field would have been.
+  const latestValues = useRef(currentValues());
+  latestValues.current = currentValues();
+  useEffect(() => {
+    return () => {
+      if (!latestValues.current.title) return;
+      onAutosave?.(latestValues.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally unmount-only; ref stays current every render
+  }, []);
+
+  const handlePrimaryPress = async () => {
+    if (!canSubmit || !primaryAction) return;
+    setSubmitting(true);
+    try {
+      const values = currentValues();
+      await onAutosave?.(values);
+      await primaryAction.onPress(values);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <ScrollView contentContainerStyle={styles.container}>
+      <ThemedText type="defaultSemiBold">Titel</ThemedText>
+      <TextInput
+        value={title}
+        onChangeText={setTitle}
+        onBlur={handleBlurAutosave}
+        onFocus={() => setTitleSelection(undefined)}
+        selection={titleSelection}
+        placeholder="z. B. Motivationsschreiben entwerfen"
+        placeholderTextColor="#888"
+        style={[styles.input, { color: textColor, borderColor }]}
+      />
+
+      <ThemedText type="defaultSemiBold" style={styles.label}>
+        Beschreibung
+      </ThemedText>
+      <TextInput
+        value={description}
+        onChangeText={setDescription}
+        onBlur={handleBlurAutosave}
+        placeholder="Optional"
+        placeholderTextColor="#888"
+        multiline
+        style={[styles.input, styles.multiline, { color: textColor, borderColor }]}
+      />
+
+      <ThemedText type="defaultSemiBold" style={styles.label}>
+        Icon (optional)
+      </ThemedText>
+      <Pressable onPress={() => setPickerVisible(true)} style={[styles.iconTrigger, { borderColor }]}>
+        <IconSymbol name="line.3.horizontal" size={18} color={textColor} />
+        {icon ? (
+          <SkillIcon id={icon} size={32} />
+        ) : (
+          <ThemedText style={styles.iconTriggerLabel}>Icon wählen…</ThemedText>
+        )}
+      </Pressable>
+      <IconPickerModal
+        visible={pickerVisible}
+        selectedId={icon}
+        onSelect={(id) => {
+          setIcon(id);
+          onAutosave?.(currentValues({ icon: id }));
+        }}
+        onClose={() => setPickerVisible(false)}
+      />
+
+      {candidatePrerequisites.length > 0 && (
+        <>
+          <ThemedText type="defaultSemiBold" style={styles.label}>
+            Voraussetzungen
+          </ThemedText>
+          {candidatePrerequisites.map((node) => (
+            <Pressable key={node.id} onPress={() => toggle(node.id)} style={styles.prereqRow}>
+              <IconSymbol
+                name={prerequisiteIds.includes(node.id) ? 'checkmark.circle.fill' : 'questionmark.circle'}
+                size={20}
+                color={prerequisiteIds.includes(node.id) ? tint : textColor}
+              />
+              <ThemedText style={styles.prereqLabel} numberOfLines={1}>
+                {node.title}
+              </ThemedText>
+            </Pressable>
+          ))}
+        </>
+      )}
+
+      {primaryAction ? (
+        <Pressable
+          onPress={handlePrimaryPress}
+          disabled={!canSubmit}
+          style={[styles.button, { backgroundColor: tint, opacity: canSubmit ? 1 : 0.5 }]}>
+          <ThemedText style={[styles.buttonLabel, { color: tintText }]}>{primaryAction.label}</ThemedText>
+        </Pressable>
+      ) : null}
+
+      {onDelete ? (
+        <Pressable onPress={onDelete} style={styles.deleteButton}>
+          <ThemedText style={styles.deleteLabel}>Löschen</ThemedText>
+        </Pressable>
+      ) : null}
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { padding: 20, gap: 8, paddingBottom: 60 },
+  label: { marginTop: 12 },
+  input: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    borderCurve: 'continuous',
+    padding: 12,
+    fontSize: 16,
+  },
+  multiline: { minHeight: 48, textAlignVertical: 'top' },
+  iconTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    borderCurve: 'continuous',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+  },
+  iconTriggerLabel: { opacity: 0.6 },
+  prereqRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
+  prereqLabel: { flex: 1 },
+  button: {
+    marginTop: 24,
+    paddingVertical: 14,
+    borderRadius: 14,
+    borderCurve: 'continuous',
+    alignItems: 'center',
+  },
+  buttonLabel: { fontWeight: '600', fontSize: 16 },
+  deleteButton: { marginTop: 12, alignItems: 'center', paddingVertical: 10 },
+  deleteLabel: { color: '#E5484D' },
+});
+</file>
+
+<file path="components/skill-tree/tree-canvas.tsx">
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Platform, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
+import Svg, { Polyline } from 'react-native-svg';
+
+import { NodeGlyph } from './node-glyph';
+import { computeLayout } from './layout';
+import { SkillTreeColors } from '@/constants/skill-tree-theme';
+import type { SkillNode } from '@/db/types';
+import type { EdgeVM } from '@/viewmodel/skill-tree-viewmodel';
+
+interface TreeCanvasProps {
+  nodes: SkillNode[];
+  edges: EdgeVM[];
+  onNodePress: (id: string) => void;
+  onNodeLongPress: (id: string) => void;
+}
+
+const MIN_SCALE = 0.5;
+const MAX_SCALE = 2.5;
+const DEFAULT_LABEL_WIDTH = 84;
+const SHAPE_CENTER_OFFSET = 28;
+// Wheel deltaY is typically in the hundreds per notch — this keeps a single scroll tick
+// feeling like a small, controllable zoom step rather than an abrupt jump.
+const WHEEL_ZOOM_SENSITIVITY = 0.001;
+
+const EDGE_COLOR: Record<SkillNode['state'], string> = {
+  locked: SkillTreeColors.edge.inactive,
+  available: SkillTreeColors.edge.inactive,
+  mastered: SkillTreeColors.edge.active,
+};
+
+export function TreeCanvas({ nodes, edges, onNodePress, onNodeLongPress }: TreeCanvasProps) {
+  const { positions, edgeWaypoints, labelWidths, width, height } = useMemo(
+    () => computeLayout(nodes, edges),
+    [nodes, edges]
+  );
+  const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+  // Reloading after an unrelated edit (e.g. saving a node's title) produces a new `nodes` array
+  // with the same members — recompute a signature of *which* nodes exist so the recenter effect
+  // below only reacts to an actual structural change (node added/removed), not every refetch.
+  const nodeIdSignature = useMemo(() => nodes.map((n) => n.id).sort().join(','), [nodes]);
+
+  const containerRef = useRef<View>(null);
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+
+  const translateX = useSharedValue(0);
+  const translateY = useSharedValue(0);
+  const scale = useSharedValue(1);
+  const savedTranslateX = useSharedValue(0);
+  const savedTranslateY = useSharedValue(0);
+  const savedScale = useSharedValue(1);
+
+  const handleContainerLayout = (e: LayoutChangeEvent) => {
+    const { width: w, height: h } = e.nativeEvent.layout;
+    setContainerSize({ width: w, height: h });
+  };
+
+  // Keep the tree centered on first measurement, on container resize (e.g. desktop window
+  // resize), and when the set of nodes actually changes (switching project, adding/removing a
+  // node) — but NOT on every reload, so editing a node's title/description and saving leaves the
+  // user's manual pan/zoom exactly where it was instead of snapping back to center.
+  useEffect(() => {
+    if (containerSize.width === 0 || containerSize.height === 0) return;
+    const centerX = (containerSize.width - width) / 2;
+    const centerY = (containerSize.height - height) / 2;
+    translateX.value = centerX;
+    translateY.value = centerY;
+    savedTranslateX.value = centerX;
+    savedTranslateY.value = centerY;
+    scale.value = 1;
+    savedScale.value = 1;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- width/height intentionally excluded, see comment above
+  }, [containerSize.width, containerSize.height, nodeIdSignature, translateX, translateY, savedTranslateX, savedTranslateY, scale, savedScale]);
+
+  // Web/desktop: mouse wheel zooms in place of touch pinch — react-native-gesture-handler's
+  // Pan gesture already handles mouse click-drag for panning on web via pointer events, so wheel
+  // only needs to cover zoom.
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const node = containerRef.current as unknown as HTMLElement | null;
+    if (!node) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const next = savedScale.value * (1 - e.deltaY * WHEEL_ZOOM_SENSITIVITY);
+      const clamped = Math.min(MAX_SCALE, Math.max(MIN_SCALE, next));
+      scale.value = clamped;
+      savedScale.value = clamped;
+    };
+
+    node.addEventListener('wheel', handleWheel, { passive: false });
+    return () => node.removeEventListener('wheel', handleWheel);
+  }, [scale, savedScale]);
+
+  const panGesture = Gesture.Pan()
+    .onUpdate((e) => {
+      translateX.value = savedTranslateX.value + e.translationX;
+      translateY.value = savedTranslateY.value + e.translationY;
+    })
+    .onEnd(() => {
+      savedTranslateX.value = translateX.value;
+      savedTranslateY.value = translateY.value;
+    });
+
+  const pinchGesture = Gesture.Pinch()
+    .onUpdate((e) => {
+      const next = savedScale.value * e.scale;
+      scale.value = Math.min(MAX_SCALE, Math.max(MIN_SCALE, next));
+    })
+    .onEnd(() => {
+      savedScale.value = scale.value;
+    });
+
+  const composedGesture = Gesture.Simultaneous(panGesture, pinchGesture);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: translateX.value }, { translateY: translateY.value }, { scale: scale.value }],
+  }));
+
+  return (
+    <View ref={containerRef} style={styles.container} onLayout={handleContainerLayout}>
+      <GestureDetector gesture={composedGesture}>
+        <Animated.View style={[{ width, height }, animatedStyle]}>
+          <Svg width={width} height={height} style={StyleSheet.absoluteFill}>
+            {edges.map((edge) => {
+              const from = positions.get(edge.sourceNodeId);
+              const to = positions.get(edge.targetNodeId);
+              const targetNode = nodeById.get(edge.targetNodeId);
+              if (!from || !to || !targetNode) return null;
+              const color = EDGE_COLOR[targetNode.state];
+              const waypoints = edgeWaypoints.get(edge.id) ?? [];
+              const points = [from, ...waypoints, to]
+                .map((p) => `${p.x},${p.y + SHAPE_CENTER_OFFSET}`)
+                .join(' ');
+              return (
+                <Polyline
+                  key={edge.id}
+                  points={points}
+                  fill="none"
+                  stroke={color}
+                  strokeWidth={targetNode.state === 'mastered' ? 5 : 2}
+                  strokeOpacity={targetNode.state === 'mastered' ? 1 : 0.55}
+                  strokeLinejoin="round"
+                />
+              );
+            })}
+          </Svg>
+
+          {nodes.map((node) => {
+            const pos = positions.get(node.id);
+            if (!pos) return null;
+            const labelWidth = labelWidths.get(node.id) ?? DEFAULT_LABEL_WIDTH;
+            return (
+              <View
+                key={node.id}
+                style={[
+                  styles.nodeWrapper,
+                  { left: pos.x - labelWidth / 2, top: pos.y - SHAPE_CENTER_OFFSET, width: labelWidth },
+                ]}>
+                <NodeGlyph
+                  title={node.title}
+                  icon={node.icon}
+                  state={node.state}
+                  labelWidth={labelWidth}
+                  onPress={() => onNodePress(node.id)}
+                  onLongPress={() => onNodeLongPress(node.id)}
+                />
+              </View>
+            );
+          })}
+        </Animated.View>
+      </GestureDetector>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, overflow: 'hidden', backgroundColor: SkillTreeColors.background },
+  nodeWrapper: { position: 'absolute', alignItems: 'center' },
+});
+</file>
+
 <file path="server/llm/gemini-client.ts">
 import { SKILL_ICONS } from '@/constants/skill-icons';
-import type { LlmClient, LlmGeneratedTree, LlmPrompt, LlmStructuredStep, LlmTreePrompt } from './types';
+import type { LlmAudio, LlmClient, LlmGeneratedTree, LlmPrompt, LlmStructuredStep, LlmTreePrompt } from './types';
 
 const VALID_ICON_IDS = new Set(SKILL_ICONS.map((icon) => icon.id));
 
@@ -9117,7 +10292,11 @@ const VALID_TYPES = new Set(['task']);
 const MAX_TITLE_WORDS = 3;
 
 // A full tree is a much bigger generation than a single step — give it more room to finish.
-const TREE_REQUEST_TIMEOUT_MS = 45_000;
+// Full JSON-schema output (thinking_process + nodes + edges) can genuinely take a while on
+// gemini-2.5-flash even for text-only input — 45s was cutting it too close in practice.
+const TREE_REQUEST_TIMEOUT_MS = 75_000;
+// Plain "audio in, transcript out" with no tree reasoning — much lighter than tree generation.
+const TRANSCRIBE_TIMEOUT_MS = 20_000;
 
 function shuffled<T>(items: T[]): T[] {
   const copy = [...items];
@@ -9186,7 +10365,11 @@ function buildTreeResponseSchema(iconIds: string[]) {
               type: 'STRING',
               description: 'Kurze, eindeutige id innerhalb dieser Antwort (z.B. "n1"). Keine echte Datenbank-id.',
             },
-            title: { type: 'STRING' },
+            title: {
+              type: 'STRING',
+              description:
+                'Kurzer, eindeutiger Name: maximal 3 Wörter, kein ganzer Satz, keine Satzzeichen. Erscheint unter einer kleinen Icon-Kachel im Skill-Tree und wird bei Überlänge abgeschnitten — muss also für sich allein, ohne die "description" zu öffnen, klar verständlich sein.',
+            },
             description: { type: 'STRING' },
             icon: { type: 'STRING', enum: iconIds },
           },
@@ -9213,8 +10396,48 @@ function buildTreeResponseSchema(iconIds: string[]) {
 export class GeminiClient implements LlmClient {
   constructor(
     private readonly apiKey: string,
-    private readonly endpoint: string
+    private readonly endpoint: string,
+    private readonly transcribeEndpoint: string
   ) {}
+
+  async transcribeAudio(input: { audio: LlmAudio }): Promise<{ text: string }> {
+    const promptText =
+      'Transcribe the following spoken audio verbatim, in the same language it was spoken in. ' +
+      'Respond with ONLY the transcript text — no commentary, no quotation marks, no markdown.';
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), TRANSCRIBE_TIMEOUT_MS);
+
+    let response: Response;
+    try {
+      response = await fetch(this.transcribeEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: 'user',
+              parts: [{ text: promptText }, { inlineData: { mimeType: input.audio.mimeType, data: input.audio.base64 } }],
+            },
+          ],
+          generationConfig: { temperature: 0 },
+        }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (!response.ok) {
+      throw new Error(`Gemini transcription request failed: ${response.status} ${(await response.text()).slice(0, 200)}`);
+    }
+
+    const data = await response.json();
+    const text: string | undefined = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) throw new Error('Gemini transcription response missing text');
+
+    return { text: text.trim() };
+  }
 
   async generateStructuredStep(prompt: LlmPrompt): Promise<LlmStructuredStep> {
     const existingNodeIds = prompt.existingNodes.map((n) => n.id);
@@ -9292,15 +10515,14 @@ export class GeminiClient implements LlmClient {
   async generateSkillTree(prompt: LlmTreePrompt): Promise<LlmGeneratedTree> {
     const iconCatalog = buildIconCatalog();
 
-    // Persona/Task/Decomposition-Rules are the user's system prompt, verbatim. Only "Rules for
-    // Output Format" and "JSON Schema Requirement" are adapted to this app's actual data model:
-    // a single node type ("task"), no stored XP/tier/quest-type fields, flat nodes+edges instead
-    // of nested tiers[].nodes[]. Tier/XP/quest-type thinking is redirected into
-    // "thinking_process", into title/description wording, and into the edges graph shape.
+    // Persona/Task/Decomposition-Rules are the user's system prompt, adapted to drop RPG/gamification
+    // framing (see CLAUDE.md "Project scope & design" — this app has a single plain "task" node type,
+    // no XP/tier/quest fields). Only "Rules for Output Format" and "JSON Schema Requirement" are
+    // further adapted to the actual data model: flat nodes+edges instead of nested tiers[].nodes[].
     const systemPrompt = [
-      'You are an expert Game Designer, Behavioral Psychologist, and Productivity Architect. Your sole',
-      'objective is to cure human procrastination by transforming overwhelmingly large real-world goals',
-      '(provided by the user) into a gamified "Skill Tree" inspired by RPGs like World of Warcraft.',
+      'You are an expert Behavioral Psychologist and Productivity Architect. Your sole objective is to',
+      'cure human procrastination by transforming overwhelmingly large real-world goals (provided by',
+      'the user) into a clear, ordered "Skill Tree" of concrete, actionable steps.',
       '',
       'Your core philosophy is the "Baby Step" methodology: Procrastination is not a time-management',
       'issue; it is caused by cognitive overload, emotional dysregulation, and action paralysis. To',
@@ -9315,20 +10537,17 @@ export class GeminiClient implements LlmClient {
       '    SEQUENTIAL THINKING: First, analyze the cognitive load of the goal and break it down',
       '    logically step-by-step. Identify the psychological friction points.',
       '    DECONSTRUCTION: Translate this analysis into a Directed Acyclic Graph (DAG) representing a',
-      '    "Skill Tree" with Tiers and Nodes (baby steps).',
+      '    "Skill Tree" with ordered steps (nodes).',
       '',
       'Rules for Goal Decomposition:',
-      '    EXTREME MICRO-STEPPING: The steps in Tier 1 MUST be incredibly trivial (e.g., "Stand up",',
+      '    EXTREME MICRO-STEPPING: The first steps MUST be incredibly trivial (e.g., "Stand up",',
       '    "Open a new tab", "Pick up one piece of paper"). They must take less than 2 minutes to',
       '    complete to build immediate psychological momentum.',
       '    LOGICAL SEQUENCING: Steps must follow a strict chronological and causal order. Step B cannot',
       '    be completed unless Step A is done.',
-      '    GAMIFICATION: Assign WoW-style RPG elements (e.g., "Quest", "Talent", "Passive Ability").',
-      '    Assign an XP value to each step. Trivial steps grant little XP (e.g., 10 XP), major',
-      '    milestones grant more (e.g., 100 XP).',
       '    BRANCHING PATHS: Create parallel branches where applicable.',
-      '    TIER PROGRESSION: Structure the tree vertically in Tiers (e.g., Tier 1: Novice, Tier 2:',
-      '    Apprentice, Tier 3: Journeyman).',
+      '    STEP PROGRESSION: Structure the tree vertically so steps get more advanced the further down',
+      '    the tree they sit (e.g., step 1 is a trivial starting action, later steps are more involved).',
       '',
       'Rules for Output Format:',
       '    Respond ONLY with a valid, well-formed JSON object matching the schema below (enforced by the',
@@ -9338,17 +10557,21 @@ export class GeminiClient implements LlmClient {
       '    "thinking_process" may stay in English regardless of the user\'s input language — it is',
       '    internal reasoning, not shown to the end user as-is.',
       '    All "title"/"description" values inside "nodes" MUST match the language used in',
-      '    PROJECT_TITLE/PROJECT_DESCRIPTION.',
+      '    PROJECT_TITLE/PROJECT_DESCRIPTION, and MUST read as plain, direct task language — no RPG',
+      '    jargon (no "Quest", "Talent", "Passive Ability", XP, or similar), no game-master voice.',
+      '    Every node\'s "title" MUST be at most 3 words, no full sentence, no punctuation, and clear',
+      '    and unambiguous entirely on its own — it renders beneath a small icon tile in the tree UI',
+      '    and gets cut off if longer, so the user must grasp the step from the title alone, without',
+      '    opening it.',
       '    For each node\'s "icon", choose the id from the provided icon catalog whose keywords best fit',
       '    that specific step — vary the choice across nodes, don\'t reuse one id repeatedly.',
       '',
       'JSON Schema Requirement:',
-      'This system only supports a single node type (baby-step "task") with no stored XP/tier/quest-type',
-      'fields — channel your Tier-/XP-/Quest-type thinking from the Rules for Goal Decomposition above',
-      'into "thinking_process", into "title"/"description" wording, and into the branching shape of',
-      '"edges" instead of separate output fields. Fill "thinking_process" first, before "nodes"/"edges":',
-      'Step 1 analyze the goal\'s cognitive friction, Step 2 identify the lowest-friction Tier-1 starting',
-      'points, Step 3 map dependencies/branches for later steps.',
+      'This system only supports a single node type ("task") with no stored tier/step-number fields —',
+      'express the step ordering from the Rules for Goal Decomposition above purely through the',
+      '"edges" graph shape, not as separate output fields. Fill "thinking_process" first, before',
+      '"nodes"/"edges": Step 1 analyze the goal\'s cognitive friction, Step 2 identify the',
+      'lowest-friction starting points, Step 3 map dependencies/branches for later steps.',
       '',
       'Every "from"/"to" value in "edges" must match an existing node "id". Do not create circular',
       'dependencies.',
@@ -9402,12 +10625,18 @@ export class GeminiClient implements LlmClient {
     // has a root) happens downstream in importSkillTree, which already owns that logic.
     const nodes = parsed.nodes
       .filter((n): n is LlmGeneratedTree['nodes'][number] => typeof n?.id === 'string' && typeof n?.title === 'string')
-      .map((n) => ({
-        id: n.id,
-        title: n.title,
-        description: typeof n.description === 'string' ? n.description : undefined,
-        icon: typeof n.icon === 'string' && VALID_ICON_IDS.has(n.icon) ? n.icon : undefined,
-      }));
+      .map((n) => {
+        // Schema description asks for at most 3 words, but free text is never schema-enforced —
+        // clamp defensively so a rambling title never reaches the tree UI (mirrors the same
+        // clamp in generateStructuredStep above).
+        const titleWords = n.title.trim().split(/\s+/);
+        return {
+          id: n.id,
+          title: titleWords.slice(0, MAX_TITLE_WORDS).join(' '),
+          description: typeof n.description === 'string' ? n.description : undefined,
+          icon: typeof n.icon === 'string' && VALID_ICON_IDS.has(n.icon) ? n.icon : undefined,
+        };
+      });
     const edges = parsed.edges.filter(
       (e): e is LlmGeneratedTree['edges'][number] => typeof e?.from === 'string' && typeof e?.to === 'string'
     );
@@ -9417,195 +10646,114 @@ export class GeminiClient implements LlmClient {
 }
 </file>
 
-<file path="components/skill-tree/node-form.tsx">
-import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+<file path="app/(tabs)/tree.tsx">
+import { Alert, Pressable, StyleSheet, View } from 'react-native';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback } from 'react';
 
 import { ThemedText } from '@/components/themed-text';
+import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { SkillIcon } from '@/components/icons/skill-icon';
-import { IconPickerModal } from '@/components/icons/icon-picker-modal';
+import { TreeCanvas } from '@/components/skill-tree/tree-canvas';
+// KI-Orb deaktiviert bis auf Weiteres — Ersatz: One-Shot Tree-Generierung bei Projekterstellung
+// import { FloatingOrb } from '@/components/orb/floating-orb';
 import { useThemeColor } from '@/hooks/use-theme-color';
-import { reduceRedundantPrerequisites, type UnlockEdge } from '@/domain/unlock';
-import type { SkillNode } from '@/db/types';
+import { useActiveProjectId } from '@/hooks/use-active-project-id';
+import { useSkillTreeViewModel } from '@/viewmodel/skill-tree-viewmodel';
+import { SkillTreeColors } from '@/constants/skill-tree-theme';
 
-export interface NodeFormValues {
-  title: string;
-  description: string;
-  icon: string | null;
-  prerequisiteIds: string[];
-}
-
-interface NodeFormProps {
-  candidatePrerequisites: SkillNode[];
-  /** The project's existing prerequisite edges — used to auto-drop a selection that's already
-      implied transitively by another one (e.g. picking a tier-3 node makes its tier-1 ancestor
-      redundant to also pick directly). */
-  existingEdges?: UnlockEdge[];
-  /** Pre-fills the form for editing an existing node; omit for the create flow. */
-  initialValues?: NodeFormValues;
-  submitLabel: string;
-  onSubmit: (values: NodeFormValues) => void | Promise<void>;
-  /** Shows a plain red "Löschen" text button below submit; omit for the create flow. */
-  onDelete?: () => void;
-}
-
-export function NodeForm({
-  candidatePrerequisites,
-  existingEdges = [],
-  initialValues,
-  submitLabel,
-  onSubmit,
-  onDelete,
-}: NodeFormProps) {
-  const [title, setTitle] = useState(initialValues?.title ?? '');
-  const [description, setDescription] = useState(initialValues?.description ?? '');
-  const [icon, setIcon] = useState<string | null>(initialValues?.icon ?? null);
-  const [pickerVisible, setPickerVisible] = useState(false);
-  const [prerequisiteIds, setPrerequisiteIds] = useState<string[]>(initialValues?.prerequisiteIds ?? []);
-  const [submitting, setSubmitting] = useState(false);
-
-  const textColor = useThemeColor({}, 'text');
+export default function TreeScreen() {
+  const [activeProjectId] = useActiveProjectId();
+  const { nodes, edges, loading, reload } = useSkillTreeViewModel(activeProjectId);
   const tint = useThemeColor({}, 'tint');
-  const tintText = useThemeColor({}, 'tintText');
-  const borderColor = useThemeColor({ light: '#E0E0E0', dark: '#333' }, 'text');
 
-  const canSubmit = title.trim().length > 0 && !submitting;
+  useFocusEffect(
+    useCallback(() => {
+      reload();
+    }, [reload])
+  );
 
-  const toggle = (id: string) => {
-    setPrerequisiteIds((prev) => {
-      const next = prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id];
-      return reduceRedundantPrerequisites(next, existingEdges);
-    });
+  const handleNodeLongPress = (id: string) => {
+    const node = nodes.find((n) => n.id === id);
+    if (!node) return;
+
+    Alert.alert('Neuen Skill anlegen', `Wo soll er relativ zu "${node.title}" stehen?`, [
+      { text: 'Abbrechen', style: 'cancel' },
+      {
+        text: 'Danach einfügen',
+        onPress: () => router.push({ pathname: '/node/new', params: { anchorNodeId: id, insertMode: 'after' } }),
+      },
+      {
+        text: 'Davor einfügen',
+        onPress: () => router.push({ pathname: '/node/new', params: { anchorNodeId: id, insertMode: 'before' } }),
+      },
+    ]);
   };
 
-  const handleSubmit = async () => {
-    if (!canSubmit) return;
-    setSubmitting(true);
-    try {
-      await onSubmit({
-        title: title.trim(),
-        description: description.trim(),
-        icon,
-        prerequisiteIds,
-      });
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  if (!activeProjectId) {
+    return (
+      <ThemedView style={styles.container}>
+        <ThemedText type="title" style={styles.title}>
+          Tree
+        </ThemedText>
+        <ThemedText style={styles.empty}>
+          Kein aktives Projekt. Wähle im Projects-Tab ein Projekt aus.
+        </ThemedText>
+      </ThemedView>
+    );
+  }
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <ThemedText type="defaultSemiBold">Titel</ThemedText>
-      <TextInput
-        value={title}
-        onChangeText={setTitle}
-        placeholder="z. B. Motivationsschreiben entwerfen"
-        placeholderTextColor="#888"
-        style={[styles.input, { color: textColor, borderColor }]}
-      />
+    <ThemedView style={styles.container}>
+      <View style={styles.header}>
+        <ThemedText type="title">Tree</ThemedText>
+        <Pressable onPress={() => router.push('/node/new')} hitSlop={8}>
+          <IconSymbol name="plus.circle.fill" size={30} color={tint} />
+        </Pressable>
+      </View>
 
-      <ThemedText type="defaultSemiBold" style={styles.label}>
-        Beschreibung
-      </ThemedText>
-      <TextInput
-        value={description}
-        onChangeText={setDescription}
-        placeholder="Optional"
-        placeholderTextColor="#888"
-        multiline
-        numberOfLines={3}
-        style={[styles.input, styles.multiline, { color: textColor, borderColor }]}
-      />
-
-      <ThemedText type="defaultSemiBold" style={styles.label}>
-        Icon (optional)
-      </ThemedText>
-      <Pressable onPress={() => setPickerVisible(true)} style={[styles.iconTrigger, { borderColor }]}>
-        <IconSymbol name="line.3.horizontal" size={18} color={textColor} />
-        {icon ? (
-          <SkillIcon id={icon} size={32} />
-        ) : (
-          <ThemedText style={styles.iconTriggerLabel}>Icon wählen…</ThemedText>
-        )}
-      </Pressable>
-      <IconPickerModal
-        visible={pickerVisible}
-        selectedId={icon}
-        onSelect={setIcon}
-        onClose={() => setPickerVisible(false)}
-      />
-
-      {candidatePrerequisites.length > 0 && (
-        <>
-          <ThemedText type="defaultSemiBold" style={styles.label}>
-            Voraussetzungen
-          </ThemedText>
-          {candidatePrerequisites.map((node) => (
-            <Pressable key={node.id} onPress={() => toggle(node.id)} style={styles.prereqRow}>
-              <IconSymbol
-                name={prerequisiteIds.includes(node.id) ? 'checkmark.circle.fill' : 'questionmark.circle'}
-                size={20}
-                color={prerequisiteIds.includes(node.id) ? tint : textColor}
-              />
-              <ThemedText style={styles.prereqLabel} numberOfLines={1}>
-                {node.title}
-              </ThemedText>
-            </Pressable>
-          ))}
-        </>
+      {!loading && nodes.length === 0 ? (
+        <ThemedText style={styles.empty}>
+          Noch keine Knoten. Tippe auf + um deinen ersten Schritt anzulegen.
+        </ThemedText>
+      ) : (
+        <View style={styles.canvasBackground}>
+          <TreeCanvas
+            nodes={nodes}
+            edges={edges}
+            onNodePress={(id) => router.push(`/node/${id}/edit`)}
+            onNodeLongPress={handleNodeLongPress}
+          />
+        </View>
       )}
 
-      <Pressable
-        onPress={handleSubmit}
-        disabled={!canSubmit}
-        style={[styles.button, { backgroundColor: tint, opacity: canSubmit ? 1 : 0.5 }]}>
-        <ThemedText style={[styles.buttonLabel, { color: tintText }]}>{submitLabel}</ThemedText>
-      </Pressable>
-
-      {onDelete ? (
-        <Pressable onPress={onDelete} style={styles.deleteButton}>
-          <ThemedText style={styles.deleteLabel}>Löschen</ThemedText>
-        </Pressable>
-      ) : null}
-    </ScrollView>
+      {/* KI-Orb deaktiviert bis auf Weiteres — Ersatz: One-Shot Tree-Generierung bei Projekterstellung
+      <View pointerEvents="box-none" style={styles.orbLayer}>
+        <FloatingOrb />
+      </View>
+      */}
+    </ThemedView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 20, gap: 8, paddingBottom: 60 },
-  label: { marginTop: 12 },
-  input: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 12,
-    borderCurve: 'continuous',
-    padding: 12,
-    fontSize: 16,
+  container: { flex: 1, paddingTop: 60 },
+  canvasBackground: { flex: 1, backgroundColor: SkillTreeColors.background },
+  orbLayer: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    paddingBottom: 24,
   },
-  multiline: { minHeight: 80, textAlignVertical: 'top' },
-  iconTrigger: {
+  header: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    gap: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 12,
-    borderCurve: 'continuous',
-    paddingVertical: 10,
-    paddingHorizontal: 14,
+    paddingHorizontal: 20,
+    marginBottom: 12,
   },
-  iconTriggerLabel: { opacity: 0.6 },
-  prereqRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
-  prereqLabel: { flex: 1 },
-  button: {
-    marginTop: 24,
-    paddingVertical: 14,
-    borderRadius: 14,
-    borderCurve: 'continuous',
-    alignItems: 'center',
-  },
-  buttonLabel: { fontWeight: '600', fontSize: 16 },
-  deleteButton: { marginTop: 12, alignItems: 'center', paddingVertical: 10 },
-  deleteLabel: { color: '#E5484D' },
+  title: { paddingHorizontal: 20 },
+  empty: { opacity: 0.6, marginTop: 20, paddingHorizontal: 20 },
 });
 </file>
 
@@ -9637,11 +10785,14 @@ interface NodeGlyphProps {
   title: string;
   icon: string | null;
   state: NodeState;
+  /** How wide the title label may render — computed per node from its actual neighbor spacing
+      (see `layout.ts`'s `labelWidths`); falls back to the original fixed column width. */
+  labelWidth?: number;
   onPress: () => void;
   onLongPress?: () => void;
 }
 
-export function NodeGlyph({ title, icon, state, onPress, onLongPress }: NodeGlyphProps) {
+export function NodeGlyph({ title, icon, state, labelWidth = 84, onPress, onLongPress }: NodeGlyphProps) {
   const color = STATE_BORDER[state];
   const pulse = useSharedValue(0);
 
@@ -9681,7 +10832,7 @@ export function NodeGlyph({ title, icon, state, onPress, onLongPress }: NodeGlyp
   const skillIcon = findSkillIcon(icon);
 
   return (
-    <View style={styles.wrapper}>
+    <View style={[styles.wrapper, { width: labelWidth }]}>
       <Pressable onPress={onPress} onLongPress={onLongPress} style={styles.shapeContainer}>
         {state === 'mastered' && (
           <Animated.View style={[styles.glow, glowStyle]} pointerEvents="none">
@@ -9716,7 +10867,7 @@ export function NodeGlyph({ title, icon, state, onPress, onLongPress }: NodeGlyp
 }
 
 const styles = StyleSheet.create({
-  wrapper: { width: 84, alignItems: 'center', gap: 4 },
+  wrapper: { alignItems: 'center', gap: 4 },
   shapeContainer: { width: SIZE, height: SIZE, alignItems: 'center', justifyContent: 'center' },
   shapeAnimated: {
     position: 'absolute',

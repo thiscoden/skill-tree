@@ -1,10 +1,11 @@
 import { useCallback, useState } from 'react';
-import { Alert, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 
 import { NodeForm, type NodeFormValues } from '@/components/skill-tree/node-form';
 import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { ConfirmModal } from '@/components/ui/confirm-modal';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import * as nodesRepo from '@/db/repositories/nodes-repo';
 import * as edgesRepo from '@/db/repositories/edges-repo';
@@ -17,6 +18,7 @@ export default function EditNodeScreen() {
   const [node, setNode] = useState<SkillNode | null>(null);
   const [existingEdges, setExistingEdges] = useState<UnlockEdge[]>([]);
   const [initialPrerequisiteIds, setInitialPrerequisiteIds] = useState<string[]>([]);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const tint = useThemeColor({}, 'tint');
 
   useFocusEffect(
@@ -60,27 +62,19 @@ export default function EditNodeScreen() {
     router.back();
   };
 
-  const handleDelete = () => {
-    const dependentCount = directChildren(existingEdges, node.id).length;
-    const dependentWarning =
-      dependentCount > 0
-        ? `\n\n${dependentCount} ${dependentCount === 1 ? 'anderer Knoten verliert' : 'andere Knoten verlieren'} diese Voraussetzung.`
-        : '';
+  const dependentCount = directChildren(existingEdges, node.id).length;
+  const dependentWarning =
+    dependentCount > 0
+      ? `\n\n${dependentCount} ${dependentCount === 1 ? 'anderer Knoten verliert' : 'andere Knoten verlieren'} diese Voraussetzung.`
+      : '';
 
-    Alert.alert('Knoten löschen', `"${node.title}" unwiderruflich löschen?${dependentWarning}`, [
-      { text: 'Abbrechen', style: 'cancel' },
-      {
-        text: 'Löschen',
-        style: 'destructive',
-        onPress: async () => {
-          await nodesRepo.deleteNode(node.id);
-          // The deleted node may have been a dependent's last unmet prerequisite —
-          // recompute rather than leave it stuck on its old locked/available state.
-          await reevaluateProjectGraph(node.projectId);
-          router.back();
-        },
-      },
-    ]);
+  const handleConfirmDelete = async () => {
+    setConfirmingDelete(false);
+    await nodesRepo.deleteNode(node.id);
+    // The deleted node may have been a dependent's last unmet prerequisite —
+    // recompute rather than leave it stuck on its old locked/available state.
+    await reevaluateProjectGraph(node.projectId);
+    router.back();
   };
 
   return (
@@ -95,7 +89,7 @@ export default function EditNodeScreen() {
                   <IconSymbol name="checkmark.circle.fill" size={24} color={tint} />
                 </Pressable>
               ) : null}
-              <Pressable onPress={handleDelete} hitSlop={8}>
+              <Pressable onPress={() => setConfirmingDelete(true)} hitSlop={8}>
                 <IconSymbol name="trash" size={24} color="#E5484D" />
               </Pressable>
             </View>
@@ -112,6 +106,15 @@ export default function EditNodeScreen() {
           prerequisiteIds: initialPrerequisiteIds,
         }}
         onAutosave={handleAutosave}
+        primaryAction={node.state !== 'locked' ? { label: 'Erledigt', onPress: handleMarkDone } : undefined}
+      />
+      <ConfirmModal
+        visible={confirmingDelete}
+        title="Knoten löschen"
+        message={`"${node.title}" unwiderruflich löschen?${dependentWarning}`}
+        confirmLabel="Löschen"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setConfirmingDelete(false)}
       />
     </>
   );

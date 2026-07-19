@@ -39,7 +39,13 @@
           }
         }
       ],
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Erlaube den Zugriff auf das Mikrofon, um dein Ziel per Sprachaufnahme zu beschreiben."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

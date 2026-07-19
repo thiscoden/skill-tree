@@ -44,6 +44,8 @@ const MAPPING = {
   'arrow.uturn.backward': 'undo',
   'line.3.horizontal': 'menu',
   'magnifyingglass': 'search',
+  'mic.fill': 'mic',
+  'stop.fill': 'stop',
 } as IconMapping;
 
 /**
