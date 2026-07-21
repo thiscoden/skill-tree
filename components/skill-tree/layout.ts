@@ -327,9 +327,17 @@ export function computeLayout(nodes: SkillNode[], edges: LayoutEdge[]): LayoutRe
   const allX = Array.from(x.values());
   const minX = Math.min(...allX);
   const maxX = Math.max(...allX);
-  const shift = SIDE_PADDING - minX;
-  for (const [key, value] of x) x.set(key, value + shift);
-  const width = Math.max(SIDE_PADDING * 2 + (maxX - minX), 320);
+
+  const contentWidth = SIDE_PADDING * 2 + (maxX - minX);
+  const width = Math.max(contentWidth, 320);
+
+  // Wenn `width` durch das 320px-Minimum größer ist als der echte Baum,
+  // muss der Extra-Raum symmetrisch verteilt werden. Sonst klebt der
+  // sichtbare Baum innerhalb seiner unsichtbaren Canvas links.
+  const extraWidth = width - contentWidth;
+  const shift = SIDE_PADDING + extraWidth / 2 - minX;
+
+for (const [key, value] of x) x.set(key, value + shift);
 
   // A label only has to clear the nearest REAL neighbor in its own row — a dummy waypoint
   // column has no rendered label of its own, so a title is free to stretch across it.

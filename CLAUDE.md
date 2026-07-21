@@ -52,6 +52,10 @@ Screens never write raw SQL; they call repositories or domain functions. Do not 
 - **`viewmodel/skill-tree-viewmodel.ts`** — renderer-agnostic `{ nodes, edges, loading, reload }`;
   `components/skill-tree/tree-canvas.tsx` never touches the db directly. `layout.ts` computes tiers
   by prerequisite depth at render time, not the stored `tier` column.
+  Das Layout in `layout.ts` berechnet eine Mindestbreite von 320. Die Extra-Breite muss zwingend
+  symmetrisch (links und rechts) auf die x-Koordinaten der Nodes verteilt werden, da der Baum sonst
+  linkslastig gerendert wird. Regel: Teste Layout-Änderungen immer über `layout.test.ts` und prüfe
+  explizit, ob ein einzelner Node exakt bei `width / 2` zentriert ist.
 
 ### Gemini backend proxy (tree-generator, formerly KI-Orb)
 

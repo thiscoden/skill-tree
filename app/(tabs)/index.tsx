@@ -5,6 +5,7 @@ import { router, useFocusEffect } from 'expo-router';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { ScreenHeader } from '@/components/ui/screen-header';
 import { ConfirmModal } from '@/components/ui/confirm-modal';
 import { ProjectListItem } from '@/components/projects/project-list-item';
 import { useThemeColor } from '@/hooks/use-theme-color';
@@ -48,32 +49,29 @@ export default function ProjectsScreen() {
 
   return (
     <ThemedView style={styles.container}>
-      <View style={styles.header}>
-        <ThemedText type="title">Projects</ThemedText>
-        <Pressable onPress={() => router.push('/project/new')} hitSlop={8}>
-          <IconSymbol name="plus.circle.fill" size={30} color={tint} />
-        </Pressable>
-      </View>
+      <ScreenHeader title="Projekte" />
 
-      <FlatList
-        data={projects}
-        keyExtractor={(p) => p.id}
-        contentContainerStyle={styles.list}
-        renderItem={({ item }) => (
-          <ProjectListItem
-            project={item}
-            onSelect={() => handleSelect(item)}
-            onEdit={() => router.push(`/project/${item.id}/edit`)}
-            onDelete={() => handleDelete(item)}
-          />
-        )}
-        ListFooterComponent={
-          <Pressable onPress={() => router.push('/project/new')} style={[styles.createCard, { borderColor }]}>
-            <IconSymbol name="plus.circle.fill" size={28} color={tint} />
-            <ThemedText type="defaultSemiBold">Projekt anlegen</ThemedText>
-          </Pressable>
-        }
-      />
+      <View style={styles.body}>
+        <FlatList
+          data={projects}
+          keyExtractor={(p) => p.id}
+          contentContainerStyle={styles.list}
+          renderItem={({ item }) => (
+            <ProjectListItem
+              project={item}
+              onSelect={() => handleSelect(item)}
+              onEdit={() => router.push(`/project/${item.id}/edit`)}
+              onDelete={() => handleDelete(item)}
+            />
+          )}
+          ListFooterComponent={
+            <Pressable onPress={() => router.push('/project/new')} style={[styles.createCard, { borderColor }]}>
+              <IconSymbol name="plus.circle.fill" size={28} color={tint} />
+              <ThemedText type="defaultSemiBold">Projekt anlegen</ThemedText>
+            </Pressable>
+          }
+        />
+      </View>
 
       <ConfirmModal
         visible={!!pendingDelete}
@@ -90,14 +88,11 @@ export default function ProjectsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    paddingTop: 60,
-    paddingHorizontal: 20,
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
+  body: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingTop: 20,
   },
   list: {
     paddingBottom: 120,

@@ -1,21 +1,8 @@
-import { useEffect, useState } from 'react';
-import { useColorScheme as useRNColorScheme } from 'react-native';
-
 /**
- * To support static rendering, this value needs to be re-calculated on the client side for web
+ * Web build is dark-only — no light-mode white background, no system-preference toggle.
+ * Matches the gothic obsidian chrome (header/tab bar), which never changed with the toggle
+ * anyway; this just makes the rest of the app (list/card backgrounds) consistent with it.
  */
-export function useColorScheme() {
-  const [hasHydrated, setHasHydrated] = useState(false);
-
-  useEffect(() => {
-    setHasHydrated(true);
-  }, []);
-
-  const colorScheme = useRNColorScheme();
-
-  if (hasHydrated) {
-    return colorScheme;
-  }
-
-  return 'light';
+export function useColorScheme(): 'dark' {
+  return 'dark';
 }

@@ -31,4 +31,22 @@ export const SkillTreeColors = {
       glow: 'rgba(250, 204, 21, 0.55)',
     },
   },
+
+  /** Header / tab bar chrome — fixed dark "obsidian + silver metal" look, not theme-following
+   * (same reasoning as `label` above: this chrome sits directly on the app's purple tree
+   * background, so it must stay legible regardless of the light/dark toggle). */
+  chrome: {
+    background: '#1A1025',
+    metalBorder: '#8B95A1',
+    metalBorderDim: '#4B5563',
+    rune: {
+      active: '#4FC3F7',
+      glow: 'rgba(79, 195, 247, 0.35)',
+    },
+    crystal: {
+      core: '#B91C1C',
+      ring: '#FF4D4D',
+      glow: 'rgba(255, 77, 77, 0.3)',
+    },
+  },
 } as const;

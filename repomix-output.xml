@@ -62,7 +62,6 @@ app/
   (tabs)/
     _layout.tsx
     index.tsx
-    profile.tsx
     tree.tsx
   api/
     generate-tree+api.ts
@@ -79,6 +78,9 @@ app/
   _layout.tsx
   quest-assist.tsx
 assets/
+  icons/
+    quest-scroll-icon.ts
+    tree-of-life-icon.ts
   images/
     android-icon-background.png
     android-icon-foreground.png
@@ -106,8 +108,10 @@ components/
     node-glyph.tsx
     tree-canvas.tsx
   ui/
+    confirm-modal.tsx
     icon-symbol.ios.tsx
     icon-symbol.tsx
+    screen-header.tsx
   haptic-tab.tsx
   themed-text.tsx
   themed-view.tsx
@@ -197,151 +201,196 @@ This section contains the contents of the repository's files.
       "Bash(xxd)",
       "Bash(rtk grep *)",
       "Bash(rtk wc *)",
-      "Bash(rtk jest *)"
+      "Bash(rtk jest *)",
+      "Bash(git -C \"C:\\\\Users\\\\c0911\\\\Desktop\\\\claude projekt\\\\skill-tree\" status --porcelain --ignored)"
     ]
   }
 }
 </file>
 
-<file path="app/api/transcribe-audio+api.ts">
-import { getLlmClient } from '@/server/llm';
-
-// Same posture as /api/generate-tree: no user accounts to gate on, so caps + rate limiter are
-// the only cost-abuse guard.
-// Gemini's inline-audio request cap is 20 MB total; base64 inflates raw bytes by ~4/3, so this
-// leaves comfortable headroom for the JSON envelope and prompt text alongside it.
-const MAX_AUDIO_BASE64_LENGTH = 18_000_000;
-const SUPPORTED_AUDIO_MIME_TYPES = new Set([
-  'audio/wav',
-  'audio/mp3',
-  'audio/aiff',
-  'audio/aac',
-  'audio/ogg',
-  'audio/flac',
-]);
-
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX_REQUESTS = 10;
-// Single-process, in-memory sliding window — same caveat as /api/generate-tree's limiter.
-const requestLog = new Map<string, number[]>();
-
-function isRateLimited(key: string): boolean {
-  const now = Date.now();
-  const timestamps = (requestLog.get(key) ?? []).filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
-  timestamps.push(now);
-  requestLog.set(key, timestamps);
-  return timestamps.length > RATE_LIMIT_MAX_REQUESTS;
-}
-
-/** Generic, vendor-neutral endpoint. Only server/llm knows a real LlmClient exists. */
-export async function POST(request: Request) {
-  const clientKey = request.headers.get('x-forwarded-for') ?? 'unknown';
-  if (isRateLimited(clientKey)) {
-    return Response.json({ error: 'Too many requests, slow down.' }, { status: 429 });
-  }
-
-  const body = await request.json();
-
-  const mimeType = body.mimeType;
-  const base64 = body.base64;
-
-  if (typeof mimeType !== 'string' || !SUPPORTED_AUDIO_MIME_TYPES.has(mimeType)) {
-    return Response.json({ error: 'mimeType is not a supported audio format' }, { status: 400 });
-  }
-  if (typeof base64 !== 'string' || base64.length === 0) {
-    return Response.json({ error: 'base64 is required' }, { status: 400 });
-  }
-  if (base64.length > MAX_AUDIO_BASE64_LENGTH) {
-    return Response.json({ error: 'audio exceeds the maximum allowed size' }, { status: 400 });
-  }
-
-  try {
-    const llm = getLlmClient();
-    const { text } = await llm.transcribeAudio({ audio: { base64, mimeType } });
-    return Response.json({ text });
-  } catch (error) {
-    console.error('transcribe-audio endpoint failed', error);
-    return Response.json({ error: 'Failed to transcribe audio' }, { status: 502 });
-  }
-}
+<file path="assets/icons/quest-scroll-icon.ts">
+/** Hand-authored SVG (WoW-ability-icon style): gold bevel frame, radial amber glow,
+ * gradient-shaded quest scroll silhouette with a wax seal. Rendered via react-native-svg's SvgXml. */
+export const questScrollIconXml = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+<defs>
+<radialGradient id="scroll-glow" cx="50%" cy="42%" r="68%">
+<stop offset="0%" stop-color="#4a3018"/>
+<stop offset="55%" stop-color="#241407"/>
+<stop offset="100%" stop-color="#0c0704"/>
+</radialGradient>
+<linearGradient id="scroll-frameOuter" x1="0" y1="0" x2="1" y2="1">
+<stop offset="0%" stop-color="#f5d98b"/>
+<stop offset="50%" stop-color="#b8863b"/>
+<stop offset="100%" stop-color="#6e4a1e"/>
+</linearGradient>
+<linearGradient id="scroll-frameInner" x1="1" y1="1" x2="0" y2="0">
+<stop offset="0%" stop-color="#3b2610"/>
+<stop offset="100%" stop-color="#8b6a32"/>
+</linearGradient>
+<linearGradient id="scroll-parchment" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0%" stop-color="#f3e2b8"/>
+<stop offset="100%" stop-color="#d8b579"/>
+</linearGradient>
+<linearGradient id="scroll-roll" x1="0" y1="0" x2="1" y2="0">
+<stop offset="0%" stop-color="#c69a5c"/>
+<stop offset="50%" stop-color="#a97c3f"/>
+<stop offset="100%" stop-color="#7d5a29"/>
+</linearGradient>
+<radialGradient id="scroll-seal" cx="35%" cy="30%" r="70%">
+<stop offset="0%" stop-color="#d84343"/>
+<stop offset="100%" stop-color="#7a1414"/>
+</radialGradient>
+</defs>
+<rect x="3" y="3" width="122" height="122" rx="16" fill="url(#scroll-glow)"/>
+<rect x="27" y="46" width="14" height="38" rx="7" fill="url(#scroll-roll)"/>
+<rect x="87" y="46" width="14" height="38" rx="7" fill="url(#scroll-roll)"/>
+<rect x="34" y="52" width="60" height="26" fill="url(#scroll-parchment)"/>
+<rect x="42" y="58" width="44" height="2.4" rx="1.2" fill="#8a6a3f" opacity="0.55"/>
+<rect x="42" y="64.5" width="36" height="2.4" rx="1.2" fill="#8a6a3f" opacity="0.55"/>
+<rect x="42" y="71" width="40" height="2.4" rx="1.2" fill="#8a6a3f" opacity="0.55"/>
+<path d="M 40 78 Q 64 90 88 78" stroke="#6b1616" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+<circle cx="64" cy="80" r="8" fill="url(#scroll-seal)"/>
+<circle cx="64" cy="80" r="8" fill="none" stroke="#4a0d0d" stroke-width="1.2"/>
+<circle cx="61.5" cy="77.5" r="2.2" fill="#f4c98a" opacity="0.85"/>
+<rect x="3" y="3" width="122" height="122" rx="16" fill="none" stroke="url(#scroll-frameOuter)" stroke-width="5"/>
+<rect x="7" y="7" width="114" height="114" rx="13" fill="none" stroke="url(#scroll-frameInner)" stroke-width="2"/>
+</svg>`;
 </file>
 
-<file path="providers/audio-transcriber/backend-provider.ts">
-import type { AudioTranscriberInput, AudioTranscriberProvider, AudioTranscriberResult } from './types';
-
-/** Talks only to our own generic endpoint — never mentions a concrete LLM vendor. */
-export class BackendAudioTranscriberProvider implements AudioTranscriberProvider {
-  constructor(private readonly baseUrl: string) {}
-
-  async transcribe(input: AudioTranscriberInput): Promise<AudioTranscriberResult> {
-    const response = await fetch(`${this.baseUrl}/api/transcribe-audio`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    });
-
-    if (!response.ok) {
-      throw new Error(`transcribe-audio backend request failed: ${response.status}`);
-    }
-
-    return (await response.json()) as AudioTranscriberResult;
-  }
-}
+<file path="assets/icons/tree-of-life-icon.ts">
+/** Hand-authored SVG (WoW-ability-icon style): gold bevel frame, radial teal glow,
+ * gradient-shaded mystical tree-of-life silhouette with glowing leaves and mirrored roots.
+ * Rendered via react-native-svg's SvgXml. */
+export const treeOfLifeIconXml = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+<defs>
+<radialGradient id="tree-glow" cx="50%" cy="40%" r="68%">
+<stop offset="0%" stop-color="#1b3a33"/>
+<stop offset="55%" stop-color="#0e1f1c"/>
+<stop offset="100%" stop-color="#070d0c"/>
+</radialGradient>
+<linearGradient id="tree-frameOuter" x1="0" y1="0" x2="1" y2="1">
+<stop offset="0%" stop-color="#f5d98b"/>
+<stop offset="50%" stop-color="#b8863b"/>
+<stop offset="100%" stop-color="#6e4a1e"/>
+</linearGradient>
+<linearGradient id="tree-frameInner" x1="1" y1="1" x2="0" y2="0">
+<stop offset="0%" stop-color="#3b2610"/>
+<stop offset="100%" stop-color="#8b6a32"/>
+</linearGradient>
+<linearGradient id="tree-bark" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0%" stop-color="#5a4632"/>
+<stop offset="100%" stop-color="#2c2016"/>
+</linearGradient>
+<radialGradient id="tree-leaf" cx="35%" cy="30%" r="70%">
+<stop offset="0%" stop-color="#eaffb0"/>
+<stop offset="55%" stop-color="#8fd15b"/>
+<stop offset="100%" stop-color="#3f7a2a"/>
+</radialGradient>
+<linearGradient id="tree-groundGlow" x1="0" y1="0" x2="1" y2="0">
+<stop offset="0%" stop-color="#9be7ff" stop-opacity="0"/>
+<stop offset="50%" stop-color="#9be7ff" stop-opacity="0.85"/>
+<stop offset="100%" stop-color="#9be7ff" stop-opacity="0"/>
+</linearGradient>
+</defs>
+<rect x="3" y="3" width="122" height="122" rx="16" fill="url(#tree-glow)"/>
+<path d="M64 76C78 80 88 92 94 104" stroke="url(#tree-bark)" stroke-width="3.5" fill="none" stroke-linecap="round" opacity="0.85"/>
+<path d="M64 76C50 80 40 92 34 104" stroke="url(#tree-bark)" stroke-width="3.5" fill="none" stroke-linecap="round" opacity="0.85"/>
+<path d="M64 76C60 86 60 96 64 106" stroke="url(#tree-bark)" stroke-width="3.5" fill="none" stroke-linecap="round" opacity="0.85"/>
+<line x1="30" y1="76" x2="98" y2="76" stroke="url(#tree-groundGlow)" stroke-width="2"/>
+<path d="M 60 76 C 59 66 60 58 64 48 C 68 58 69 66 68 76 Z" fill="url(#tree-bark)"/>
+<path d="M64 50C50 46 40 34 34 22" stroke="url(#tree-bark)" stroke-width="4" fill="none" stroke-linecap="round"/>
+<path d="M64 50C78 46 88 34 94 22" stroke="url(#tree-bark)" stroke-width="4" fill="none" stroke-linecap="round"/>
+<path d="M64 50C60 40 60 30 64 20" stroke="url(#tree-bark)" stroke-width="4" fill="none" stroke-linecap="round"/>
+<circle cx="48" cy="30" r="3.5" fill="url(#tree-leaf)"/>
+<circle cx="80" cy="30" r="3.5" fill="url(#tree-leaf)"/>
+<circle cx="34" cy="22" r="5" fill="url(#tree-leaf)"/>
+<circle cx="94" cy="22" r="5" fill="url(#tree-leaf)"/>
+<circle cx="64" cy="18" r="5.5" fill="url(#tree-leaf)"/>
+<rect x="3" y="3" width="122" height="122" rx="16" fill="none" stroke="url(#tree-frameOuter)" stroke-width="5"/>
+<rect x="7" y="7" width="114" height="114" rx="13" fill="none" stroke="url(#tree-frameInner)" stroke-width="2"/>
+</svg>`;
 </file>
 
-<file path="providers/audio-transcriber/index.ts">
-import type { AudioTranscriberProvider } from './types';
-import { MockAudioTranscriberProvider } from './mock-provider';
-import { BackendAudioTranscriberProvider } from './backend-provider';
+<file path="components/ui/screen-header.tsx">
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-let instance: AudioTranscriberProvider | null = null;
+import { IconSymbol, type IconSymbolName } from '@/components/ui/icon-symbol';
+import { SkillTreeColors } from '@/constants/skill-tree-theme';
 
-/**
- * Single swap point, same pattern as providers/tree-generator/index.ts. Defaults to the
- * (throwing) offline mock. Set EXPO_PUBLIC_LLM_BACKEND_URL to switch to the real backend.
- */
-export function getAudioTranscriberProvider(): AudioTranscriberProvider {
-  if (!instance) {
-    const backendUrl = process.env.EXPO_PUBLIC_LLM_BACKEND_URL;
-    instance = backendUrl ? new BackendAudioTranscriberProvider(backendUrl) : new MockAudioTranscriberProvider();
-  }
-  return instance;
-}
-</file>
-
-<file path="providers/audio-transcriber/mock-provider.ts">
-import type { AudioTranscriberInput, AudioTranscriberProvider, AudioTranscriberResult } from './types';
-
-/**
- * Transcription always needs a real LLM to listen to the audio — there's no meaningful offline
- * fallback. The mic control is hidden via isBackendConfigured() whenever this provider would be
- * selected, so this path shouldn't be reachable in practice; it exists for symmetry with
- * providers/tree-generator/mock-provider.ts and to fail loudly if that gating is ever bypassed.
- */
-export class MockAudioTranscriberProvider implements AudioTranscriberProvider {
-  async transcribe(_input: AudioTranscriberInput): Promise<AudioTranscriberResult> {
-    throw new Error('Audio transcription requires a configured LLM backend.');
-  }
-}
-</file>
-
-<file path="providers/audio-transcriber/types.ts">
-export interface AudioTranscriberInput {
-  base64: string;
-  mimeType: string;
+interface ScreenHeaderAction {
+  icon: IconSymbolName;
+  onPress: () => void;
 }
 
-export interface AudioTranscriberResult {
-  text: string;
+interface ScreenHeaderProps {
+  title: string;
+  action?: ScreenHeaderAction;
 }
 
 /**
- * App-side contract. Never mentions an LLM vendor — implementations may be a local
- * mock (offline default) or a call to our own generic backend endpoint.
+ * Gothic obsidian-and-silver chrome for the main tab screens. Fixed dark background + label
+ * color (not theme-following) — same reasoning as SkillTreeColors.label: this sits directly on
+ * the app's purple tree background, so it must stay legible regardless of light/dark mode.
  */
-export interface AudioTranscriberProvider {
-  transcribe(input: AudioTranscriberInput): Promise<AudioTranscriberResult>;
+export function ScreenHeader({ title, action }: ScreenHeaderProps) {
+  return (
+    <View style={styles.header}>
+      <Text style={styles.title}>{title}</Text>
+      {action ? (
+        <Pressable onPress={action.onPress} hitSlop={8} style={styles.crystalRing}>
+          <View style={styles.crystalCore}>
+            <IconSymbol name={action.icon} size={18} color="#fff" />
+          </View>
+        </Pressable>
+      ) : null}
+    </View>
+  );
 }
+
+const styles = StyleSheet.create({
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 60,
+    paddingBottom: 16,
+    // Without an `action`, the row's content is just the title text (~34px), shorter than the
+    // 40px crystal button — pin a minHeight so every screen's bar is the same height regardless
+    // of whether it has an action button.
+    minHeight: 116,
+    backgroundColor: SkillTreeColors.chrome.background,
+    borderBottomWidth: 1.5,
+    borderBottomColor: SkillTreeColors.chrome.metalBorder,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: SkillTreeColors.label,
+  },
+  crystalRing: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: SkillTreeColors.chrome.crystal.glow,
+    borderWidth: 1.5,
+    borderColor: SkillTreeColors.chrome.crystal.ring,
+    shadowColor: SkillTreeColors.chrome.crystal.ring,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 8,
+  },
+  crystalCore: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: SkillTreeColors.chrome.crystal.core,
+  },
+});
 </file>
 
 <file path=".agents/skills/expo-native-ui/agents/openai.yaml">
@@ -2498,64 +2547,122 @@ Use CSS `boxShadow` style prop. NEVER use legacy React Native shadow or elevatio
 </file>
 
 <file path="app/(tabs)/_layout.tsx">
+import { Platform, StyleSheet, View } from 'react-native';
 import { Tabs } from 'expo-router';
+import { SvgXml } from 'react-native-svg';
 import React from 'react';
 
 import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
+import { SkillTreeColors } from '@/constants/skill-tree-theme';
+import { questScrollIconXml } from '@/assets/icons/quest-scroll-icon';
+import { treeOfLifeIconXml } from '@/assets/icons/tree-of-life-icon';
+
+/** Same glow ring, but for the custom illustrated icons — those carry their own fixed colors
+ * (own white card background baked in), so only the ring glows on focus, not the artwork. */
+function RuneImageIcon({ xml, focused }: { xml: string; focused: boolean }) {
+  return (
+    <View
+      style={[
+        styles.runeRing,
+        focused && {
+          backgroundColor: SkillTreeColors.chrome.rune.glow,
+          borderColor: SkillTreeColors.chrome.rune.active,
+        },
+      ]}>
+      <View style={styles.imageIconClip}>
+        <SvgXml xml={xml} width={28} height={28} />
+      </View>
+    </View>
+  );
+}
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
-
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
         headerShown: false,
         tabBarButton: HapticTab,
+        tabBarShowLabel: false,
+        tabBarStyle: styles.tabBar,
       }}>
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Projects',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="folder.fill" color={color} />,
+          title: 'Projekte',
+          tabBarIcon: ({ focused }) => <RuneImageIcon xml={questScrollIconXml} focused={focused} />,
         }}
       />
       <Tabs.Screen
         name="tree"
         options={{
-          title: 'Tree',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="hexagon.fill" color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="profile"
-        options={{
-          title: 'Profile',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="person.fill" color={color} />,
+          title: 'Skilltree',
+          tabBarIcon: ({ focused }) => <RuneImageIcon xml={treeOfLifeIconXml} focused={focused} />,
         }}
       />
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  tabBar: {
+    backgroundColor: SkillTreeColors.chrome.background,
+    borderTopWidth: 1.5,
+    borderTopColor: SkillTreeColors.chrome.metalBorder,
+    // Taller bar + more breathing room around the icons — mobile only (web keeps the default
+    // bar height from the earlier reskin, untouched here).
+    ...Platform.select({
+      ios: { height: 92, paddingTop: 14, paddingBottom: 32 },
+      android: { height: 76, paddingTop: 14, paddingBottom: 14 },
+      default: {},
+    }),
+  },
+  runeRing: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+  },
+  imageIconClip: {
+    // Matches ScreenHeader's crystalCore (28x28) exactly, per request.
+    width: 28,
+    height: 28,
+    borderRadius: 6,
+    overflow: 'hidden',
+  },
+});
 </file>
 
-<file path="app/api/generate-tree+api.ts">
+<file path="app/api/transcribe-audio+api.ts">
 import { getLlmClient } from '@/server/llm';
 
-// Same posture as /api/quest-giver: no user accounts to gate on (local-first app, auth is a
-// future milestone), so these caps and the rate limiter are the only cost-abuse guard. Caps are
-// far more generous here — a full goal description needs real room, unlike a single-step title.
-const MAX_PROJECT_TITLE_LENGTH = 300;
-const MAX_GOAL_DESCRIPTION_LENGTH = 4000;
+// Same posture as /api/generate-tree: no user accounts to gate on, so caps + rate limiter are
+// the only cost-abuse guard.
+// Gemini's inline-audio request cap is 20 MB total; base64 inflates raw bytes by ~4/3, so this
+// leaves comfortable headroom for the JSON envelope and prompt text alongside it.
+const MAX_AUDIO_BASE64_LENGTH = 18_000_000;
+const SUPPORTED_AUDIO_MIME_TYPES = new Set([
+  'audio/wav',
+  'audio/mp3',
+  'audio/aiff',
+  'audio/aac',
+  'audio/ogg',
+  'audio/flac',
+]);
+
+// Same cross-origin situation as /api/generate-tree: EXPO_PUBLIC_LLM_BACKEND_URL is typically a
+// LAN IP for native clients, which is a different origin than the web page's own "localhost".
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 10;
-// Single-process, in-memory sliding window. Resets on redeploy/restart and isn't shared across
-// instances — acceptable for a single-instance MVP, not a substitute for a real gateway-level
-// limiter once this is deployed behind multiple instances.
+// Single-process, in-memory sliding window — same caveat as /api/generate-tree's limiter.
 const requestLog = new Map<string, number[]>();
 
 function isRateLimited(key: string): boolean {
@@ -2566,31 +2673,39 @@ function isRateLimited(key: string): boolean {
   return timestamps.length > RATE_LIMIT_MAX_REQUESTS;
 }
 
-/** Generic, vendor-neutral endpoint. Only this file knows a real LlmClient exists. */
+export async function OPTIONS() {
+  return new Response(null, { status: 204, headers: CORS_HEADERS });
+}
+
+/** Generic, vendor-neutral endpoint. Only server/llm knows a real LlmClient exists. */
 export async function POST(request: Request) {
   const clientKey = request.headers.get('x-forwarded-for') ?? 'unknown';
   if (isRateLimited(clientKey)) {
-    return Response.json({ error: 'Too many requests, slow down.' }, { status: 429 });
+    return Response.json({ error: 'Too many requests, slow down.' }, { status: 429, headers: CORS_HEADERS });
   }
 
   const body = await request.json();
 
-  const projectTitle =
-    typeof body.projectTitle === 'string' ? body.projectTitle.slice(0, MAX_PROJECT_TITLE_LENGTH) : '';
-  const goalDescription =
-    typeof body.goalDescription === 'string' ? body.goalDescription.slice(0, MAX_GOAL_DESCRIPTION_LENGTH) : '';
+  const mimeType = body.mimeType;
+  const base64 = body.base64;
 
-  if (!projectTitle) {
-    return Response.json({ error: 'projectTitle is required' }, { status: 400 });
+  if (typeof mimeType !== 'string' || !SUPPORTED_AUDIO_MIME_TYPES.has(mimeType)) {
+    return Response.json({ error: 'mimeType is not a supported audio format' }, { status: 400, headers: CORS_HEADERS });
+  }
+  if (typeof base64 !== 'string' || base64.length === 0) {
+    return Response.json({ error: 'base64 is required' }, { status: 400, headers: CORS_HEADERS });
+  }
+  if (base64.length > MAX_AUDIO_BASE64_LENGTH) {
+    return Response.json({ error: 'audio exceeds the maximum allowed size' }, { status: 400, headers: CORS_HEADERS });
   }
 
   try {
     const llm = getLlmClient();
-    const tree = await llm.generateSkillTree({ projectTitle, goalDescription });
-    return Response.json(tree);
+    const { text } = await llm.transcribeAudio({ audio: { base64, mimeType } });
+    return Response.json({ text }, { headers: CORS_HEADERS });
   } catch (error) {
-    console.error('generate-tree endpoint failed', error);
-    return Response.json({ error: 'Failed to generate a skill tree' }, { status: 502 });
+    console.error('transcribe-audio endpoint failed', error);
+    return Response.json({ error: 'Failed to transcribe audio' }, { status: 502, headers: CORS_HEADERS });
   }
 }
 </file>
@@ -2760,6 +2875,81 @@ export function SkillIcon({ id, size = 32 }: SkillIconProps) {
   const icon = findSkillIcon(id);
   return <SvgXml xml={icon?.xml ?? FALLBACK_XML} width={size} height={size} />;
 }
+</file>
+
+<file path="components/ui/confirm-modal.tsx">
+import { Modal, Pressable, StyleSheet, View } from 'react-native';
+
+import { ThemedText } from '@/components/themed-text';
+import { useThemeColor } from '@/hooks/use-theme-color';
+
+interface ConfirmModalProps {
+  visible: boolean;
+  title: string;
+  message: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+/**
+ * Cross-platform stand-in for Alert.alert's multi-button form. react-native-web's Alert.alert
+ * doesn't render custom buttons (or wire up their onPress) at all — on web, tapping a delete
+ * button using that API silently does nothing. A real Modal works identically everywhere.
+ */
+export function ConfirmModal({ visible, title, message, confirmLabel, onConfirm, onCancel }: ConfirmModalProps) {
+  const background = useThemeColor({}, 'background');
+  const textColor = useThemeColor({}, 'text');
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <Pressable style={styles.backdrop} onPress={onCancel}>
+        <Pressable style={[styles.card, { backgroundColor: background }]} onPress={() => {}}>
+          <ThemedText type="defaultSemiBold" style={styles.title}>
+            {title}
+          </ThemedText>
+          <ThemedText style={styles.message}>{message}</ThemedText>
+          <Pressable onPress={onConfirm} style={styles.confirmButton}>
+            <ThemedText style={styles.confirmLabel}>{confirmLabel}</ThemedText>
+          </Pressable>
+          <Pressable onPress={onCancel} style={styles.cancelButton}>
+            <ThemedText style={[styles.cancelLabel, { color: textColor }]}>Abbrechen</ThemedText>
+          </Pressable>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+const styles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  card: {
+    width: '100%',
+    maxWidth: 340,
+    borderRadius: 16,
+    borderCurve: 'continuous',
+    padding: 20,
+    gap: 10,
+  },
+  title: { textAlign: 'center' },
+  message: { textAlign: 'center', opacity: 0.8, marginBottom: 4 },
+  confirmButton: {
+    paddingVertical: 14,
+    borderRadius: 14,
+    borderCurve: 'continuous',
+    alignItems: 'center',
+    backgroundColor: '#E5484D',
+  },
+  confirmLabel: { fontWeight: '600', fontSize: 16, color: '#fff' },
+  cancelButton: { marginTop: 4, alignItems: 'center', paddingVertical: 10 },
+  cancelLabel: { opacity: 0.7 },
+});
 </file>
 
 <file path="components/ui/icon-symbol.ios.tsx">
@@ -3186,26 +3376,13 @@ export { useColorScheme } from 'react-native';
 </file>
 
 <file path="hooks/use-color-scheme.web.ts">
-import { useEffect, useState } from 'react';
-import { useColorScheme as useRNColorScheme } from 'react-native';
-
 /**
- * To support static rendering, this value needs to be re-calculated on the client side for web
+ * Web build is dark-only — no light-mode white background, no system-preference toggle.
+ * Matches the gothic obsidian chrome (header/tab bar), which never changed with the toggle
+ * anyway; this just makes the rest of the app (list/card backgrounds) consistent with it.
  */
-export function useColorScheme() {
-  const [hasHydrated, setHasHydrated] = useState(false);
-
-  useEffect(() => {
-    setHasHydrated(true);
-  }, []);
-
-  const colorScheme = useRNColorScheme();
-
-  if (hasHydrated) {
-    return colorScheme;
-  }
-
-  return 'light';
+export function useColorScheme(): 'dark' {
+  return 'dark';
 }
 </file>
 
@@ -3255,6 +3432,84 @@ export function useThemeColor(
 }
 </file>
 
+<file path="providers/audio-transcriber/backend-provider.ts">
+import type { AudioTranscriberInput, AudioTranscriberProvider, AudioTranscriberResult } from './types';
+
+/** Talks only to our own generic endpoint — never mentions a concrete LLM vendor. */
+export class BackendAudioTranscriberProvider implements AudioTranscriberProvider {
+  constructor(private readonly baseUrl: string) {}
+
+  async transcribe(input: AudioTranscriberInput): Promise<AudioTranscriberResult> {
+    const response = await fetch(`${this.baseUrl}/api/transcribe-audio`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+
+    if (!response.ok) {
+      throw new Error(`transcribe-audio backend request failed: ${response.status}`);
+    }
+
+    return (await response.json()) as AudioTranscriberResult;
+  }
+}
+</file>
+
+<file path="providers/audio-transcriber/index.ts">
+import type { AudioTranscriberProvider } from './types';
+import { MockAudioTranscriberProvider } from './mock-provider';
+import { BackendAudioTranscriberProvider } from './backend-provider';
+
+let instance: AudioTranscriberProvider | null = null;
+
+/**
+ * Single swap point, same pattern as providers/tree-generator/index.ts. Defaults to the
+ * (throwing) offline mock. Set EXPO_PUBLIC_LLM_BACKEND_URL to switch to the real backend.
+ */
+export function getAudioTranscriberProvider(): AudioTranscriberProvider {
+  if (!instance) {
+    const backendUrl = process.env.EXPO_PUBLIC_LLM_BACKEND_URL;
+    instance = backendUrl ? new BackendAudioTranscriberProvider(backendUrl) : new MockAudioTranscriberProvider();
+  }
+  return instance;
+}
+</file>
+
+<file path="providers/audio-transcriber/mock-provider.ts">
+import type { AudioTranscriberInput, AudioTranscriberProvider, AudioTranscriberResult } from './types';
+
+/**
+ * Transcription always needs a real LLM to listen to the audio — there's no meaningful offline
+ * fallback. The mic control is hidden via isBackendConfigured() whenever this provider would be
+ * selected, so this path shouldn't be reachable in practice; it exists for symmetry with
+ * providers/tree-generator/mock-provider.ts and to fail loudly if that gating is ever bypassed.
+ */
+export class MockAudioTranscriberProvider implements AudioTranscriberProvider {
+  async transcribe(_input: AudioTranscriberInput): Promise<AudioTranscriberResult> {
+    throw new Error('Audio transcription requires a configured LLM backend.');
+  }
+}
+</file>
+
+<file path="providers/audio-transcriber/types.ts">
+export interface AudioTranscriberInput {
+  base64: string;
+  mimeType: string;
+}
+
+export interface AudioTranscriberResult {
+  text: string;
+}
+
+/**
+ * App-side contract. Never mentions an LLM vendor — implementations may be a local
+ * mock (offline default) or a call to our own generic backend endpoint.
+ */
+export interface AudioTranscriberProvider {
+  transcribe(input: AudioTranscriberInput): Promise<AudioTranscriberResult>;
+}
+</file>
+
 <file path="providers/quest-giver/backend-provider.ts">
 import type { QuestGiverInput, QuestGiverProvider, QuestGiverSuggestion } from './types';
 
@@ -3298,32 +3553,6 @@ export class BackendTreeGeneratorProvider implements TreeGeneratorProvider {
 
     return (await response.json()) as GeneratedTree;
   }
-}
-</file>
-
-<file path="providers/tree-generator/index.ts">
-import type { TreeGeneratorProvider } from './types';
-import { MockTreeGeneratorProvider } from './mock-provider';
-import { BackendTreeGeneratorProvider } from './backend-provider';
-
-let instance: TreeGeneratorProvider | null = null;
-
-/**
- * Single swap point. Defaults to the offline mock. Set EXPO_PUBLIC_LLM_BACKEND_URL
- * once /api/generate-tree is actually deployed to switch to the real backend — no
- * other call site changes.
- */
-export function getTreeGeneratorProvider(): TreeGeneratorProvider {
-  if (!instance) {
-    const backendUrl = process.env.EXPO_PUBLIC_LLM_BACKEND_URL;
-    instance = backendUrl ? new BackendTreeGeneratorProvider(backendUrl) : new MockTreeGeneratorProvider();
-  }
-  return instance;
-}
-
-/** Audio input needs a real LLM to listen to it — the offline mock provider can't use it. */
-export function isBackendConfigured(): boolean {
-  return !!process.env.EXPO_PUBLIC_LLM_BACKEND_URL;
 }
 </file>
 
@@ -3511,39 +3740,6 @@ rl.question(
 );
 </file>
 
-<file path="server/llm/index.ts">
-import type { LlmClient } from './types';
-import { GeminiClient } from './gemini-client';
-
-const DEFAULT_GEMINI_ENDPOINT =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
-// Cheaper, faster tier — transcription is plain "audio in, text out", no tree reasoning needed.
-const DEFAULT_GEMINI_TRANSCRIBE_ENDPOINT =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent';
-
-/**
- * Server-only vendor selection. Swapping LLM providers is an env-var + implementation
- * change here — the app client and the /api/quest-giver contract never change.
- */
-export function getLlmClient(): LlmClient {
-  const provider = process.env.LLM_PROVIDER ?? 'gemini';
-  const apiKey = process.env.LLM_API_KEY;
-  const endpoint = process.env.LLM_ENDPOINT ?? DEFAULT_GEMINI_ENDPOINT;
-  const transcribeEndpoint = process.env.LLM_TRANSCRIBE_ENDPOINT ?? DEFAULT_GEMINI_TRANSCRIBE_ENDPOINT;
-
-  if (!apiKey) {
-    throw new Error('LLM_API_KEY is not set. Configure it as a server-only env var — never bundle it into the client.');
-  }
-
-  switch (provider) {
-    case 'gemini':
-      return new GeminiClient(apiKey, endpoint, transcribeEndpoint);
-    default:
-      throw new Error(`Unknown LLM_PROVIDER "${provider}"`);
-  }
-}
-</file>
-
 <file path="utils/session-storage.ts">
 import 'expo-sqlite/localStorage/install';
 
@@ -3675,64 +3871,6 @@ app-example
 Read the exact versioned docs at https://docs.expo.dev/versions/v54.0.0/ before writing any code.
 </file>
 
-<file path="app.json">
-{
-  "expo": {
-    "name": "skill-tree",
-    "slug": "skill-tree",
-    "version": "1.0.0",
-    "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
-    "scheme": "skilltree",
-    "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
-    "ios": {
-      "supportsTablet": true
-    },
-    "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
-      },
-      "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
-    },
-    "web": {
-      "output": "server",
-      "favicon": "./assets/images/favicon.png"
-    },
-    "plugins": [
-      "expo-router",
-      [
-        "expo-splash-screen",
-        {
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 200,
-          "resizeMode": "contain",
-          "backgroundColor": "#ffffff",
-          "dark": {
-            "backgroundColor": "#000000"
-          }
-        }
-      ],
-      "expo-sqlite",
-      [
-        "expo-audio",
-        {
-          "microphonePermission": "Erlaube den Zugriff auf das Mikrofon, um dein Ziel per Sprachaufnahme zu beschreiben."
-        }
-      ]
-    ],
-    "experiments": {
-      "typedRoutes": true,
-      "reactCompiler": true
-    }
-  }
-}
-</file>
-
 <file path="eslint.config.js">
 // https://docs.expo.dev/guides/using-eslint/
 const { defineConfig } = require('eslint/config');
@@ -3756,74 +3894,6 @@ const config = getDefaultConfig(__dirname);
 config.resolver.assetExts.push('wasm');
 
 module.exports = config;
-</file>
-
-<file path="package.json">
-{
-  "name": "skill-tree",
-  "main": "expo-router/entry",
-  "version": "1.0.0",
-  "scripts": {
-    "start": "expo start",
-    "reset-project": "node ./scripts/reset-project.js",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web",
-    "lint": "expo lint",
-    "test": "jest"
-  },
-  "dependencies": {
-    "@expo/vector-icons": "^15.0.3",
-    "@react-navigation/bottom-tabs": "^7.4.0",
-    "@react-navigation/elements": "^2.6.3",
-    "@react-navigation/native": "^7.1.8",
-    "expo": "~54.0.35",
-    "expo-audio": "~1.1.1",
-    "expo-blur": "~15.0.8",
-    "expo-constants": "~18.0.13",
-    "expo-crypto": "~15.0.9",
-    "expo-file-system": "~19.0.23",
-    "expo-font": "~14.0.12",
-    "expo-glass-effect": "~0.1.10",
-    "expo-haptics": "~15.0.8",
-    "expo-image": "~3.0.11",
-    "expo-linking": "~8.0.12",
-    "expo-router": "~6.0.24",
-    "expo-splash-screen": "~31.0.13",
-    "expo-sqlite": "~16.0.10",
-    "expo-status-bar": "~3.0.9",
-    "expo-symbols": "~1.0.8",
-    "expo-system-ui": "~6.0.9",
-    "expo-web-browser": "~15.0.11",
-    "react": "19.1.0",
-    "react-dom": "19.1.0",
-    "react-native": "0.81.5",
-    "react-native-gesture-handler": "~2.28.0",
-    "react-native-reanimated": "~4.1.1",
-    "react-native-safe-area-context": "~5.6.0",
-    "react-native-screens": "~4.16.0",
-    "react-native-svg": "15.12.1",
-    "react-native-web": "~0.21.0",
-    "react-native-worklets": "0.5.1"
-  },
-  "devDependencies": {
-    "@types/jest": "^29.5.14",
-    "@types/react": "~19.1.0",
-    "eslint": "^9.25.0",
-    "eslint-config-expo": "~10.0.0",
-    "jest": "~29.7.0",
-    "jest-expo": "~54.0.17",
-    "typescript": "~5.9.2"
-  },
-  "private": true,
-  "jest": {
-    "preset": "jest-expo",
-    "testPathIgnorePatterns": [
-      "/node_modules/",
-      "/app-example/"
-    ]
-  }
-}
 </file>
 
 <file path="README.md">
@@ -3913,228 +3983,69 @@ Join our community of developers creating universal apps.
 }
 </file>
 
-<file path="app/(tabs)/index.tsx">
-import { useCallback, useState } from 'react';
-import { Alert, FlatList, Pressable, StyleSheet, View } from 'react-native';
-import { router, useFocusEffect } from 'expo-router';
+<file path="app/api/generate-tree+api.ts">
+import { getLlmClient } from '@/server/llm';
 
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { ProjectListItem } from '@/components/projects/project-list-item';
-import { useThemeColor } from '@/hooks/use-theme-color';
-import { useActiveProjectId } from '@/hooks/use-active-project-id';
-import * as projectsRepo from '@/db/repositories/projects-repo';
-import type { Project } from '@/db/types';
+// Same posture as /api/quest-giver: no user accounts to gate on (local-first app, auth is a
+// future milestone), so these caps and the rate limiter are the only cost-abuse guard. Caps are
+// far more generous here — a full goal description needs real room, unlike a single-step title.
+const MAX_PROJECT_TITLE_LENGTH = 300;
+const MAX_GOAL_DESCRIPTION_LENGTH = 4000;
 
-export default function ProjectsScreen() {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [activeProjectId, setActiveProjectId] = useActiveProjectId();
-  const tint = useThemeColor({}, 'tint');
+// The Expo web client and this API route are the same server, but EXPO_PUBLIC_LLM_BACKEND_URL is
+// typically a LAN IP (so a native/Android client can reach it) — from a browser that's a different
+// origin than the page's own "localhost", so plain fetch() gets blocked without CORS headers here.
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
 
-  const reload = useCallback(async () => {
-    const list = await projectsRepo.listProjects(true);
-    setProjects(list);
-  }, []);
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_REQUESTS = 10;
+// Single-process, in-memory sliding window. Resets on redeploy/restart and isn't shared across
+// instances — acceptable for a single-instance MVP, not a substitute for a real gateway-level
+// limiter once this is deployed behind multiple instances.
+const requestLog = new Map<string, number[]>();
 
-  useFocusEffect(
-    useCallback(() => {
-      reload();
-    }, [reload])
-  );
-
-  const handleDelete = (project: Project) => {
-    Alert.alert('Projekt löschen', `"${project.name}" und alle Knoten unwiderruflich löschen?`, [
-      { text: 'Abbrechen', style: 'cancel' },
-      {
-        text: 'Löschen',
-        style: 'destructive',
-        onPress: async () => {
-          await projectsRepo.deleteProject(project.id);
-          if (activeProjectId === project.id) setActiveProjectId(null);
-          reload();
-        },
-      },
-    ]);
-  };
-
-  const handleSelect = (project: Project) => {
-    setActiveProjectId(project.id);
-    router.push('/(tabs)/tree');
-  };
-
-  return (
-    <ThemedView style={styles.container}>
-      <View style={styles.header}>
-        <ThemedText type="title">Projects</ThemedText>
-        <Pressable onPress={() => router.push('/project/new')} hitSlop={8}>
-          <IconSymbol name="plus.circle.fill" size={30} color={tint} />
-        </Pressable>
-      </View>
-
-      {projects.length === 0 ? (
-        <ThemedText style={styles.empty}>
-          Noch kein Projekt. Tippe auf + um dein erstes großes Ziel anzulegen.
-        </ThemedText>
-      ) : (
-        <FlatList
-          data={projects}
-          keyExtractor={(p) => p.id}
-          contentContainerStyle={styles.list}
-          renderItem={({ item }) => (
-            <ProjectListItem
-              project={item}
-              onSelect={() => handleSelect(item)}
-              onEdit={() => router.push(`/project/${item.id}/edit`)}
-              onDelete={() => handleDelete(item)}
-            />
-          )}
-        />
-      )}
-    </ThemedView>
-  );
+function isRateLimited(key: string): boolean {
+  const now = Date.now();
+  const timestamps = (requestLog.get(key) ?? []).filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+  timestamps.push(now);
+  requestLog.set(key, timestamps);
+  return timestamps.length > RATE_LIMIT_MAX_REQUESTS;
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    paddingTop: 60,
-    paddingHorizontal: 20,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  list: {
-    paddingBottom: 120,
-  },
-  empty: {
-    opacity: 0.6,
-    marginTop: 40,
-  },
-});
-</file>
+export async function OPTIONS() {
+  return new Response(null, { status: 204, headers: CORS_HEADERS });
+}
 
-<file path="app/node/[id]/edit.tsx">
-import { useCallback, useState } from 'react';
-import { Alert, Pressable, View } from 'react-native';
-import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
+/** Generic, vendor-neutral endpoint. Only this file knows a real LlmClient exists. */
+export async function POST(request: Request) {
+  const clientKey = request.headers.get('x-forwarded-for') ?? 'unknown';
+  if (isRateLimited(clientKey)) {
+    return Response.json({ error: 'Too many requests, slow down.' }, { status: 429, headers: CORS_HEADERS });
+  }
 
-import { NodeForm, type NodeFormValues } from '@/components/skill-tree/node-form';
-import { ThemedView } from '@/components/themed-view';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { useThemeColor } from '@/hooks/use-theme-color';
-import * as nodesRepo from '@/db/repositories/nodes-repo';
-import * as edgesRepo from '@/db/repositories/edges-repo';
-import { directChildren, type UnlockEdge } from '@/domain/unlock';
-import { markMastered, markUnmastered, reevaluateProjectGraph } from '@/domain/mastery';
-import type { SkillNode } from '@/db/types';
+  const body = await request.json();
 
-export default function EditNodeScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
-  const [node, setNode] = useState<SkillNode | null>(null);
-  const [existingEdges, setExistingEdges] = useState<UnlockEdge[]>([]);
-  const [initialPrerequisiteIds, setInitialPrerequisiteIds] = useState<string[]>([]);
-  const tint = useThemeColor({}, 'tint');
+  const projectTitle =
+    typeof body.projectTitle === 'string' ? body.projectTitle.slice(0, MAX_PROJECT_TITLE_LENGTH) : '';
+  const goalDescription =
+    typeof body.goalDescription === 'string' ? body.goalDescription.slice(0, MAX_GOAL_DESCRIPTION_LENGTH) : '';
 
-  useFocusEffect(
-    useCallback(() => {
-      (async () => {
-        const current = await nodesRepo.getNode(id);
-        if (!current) return;
+  if (!projectTitle) {
+    return Response.json({ error: 'projectTitle is required' }, { status: 400, headers: CORS_HEADERS });
+  }
 
-        const allEdges = await edgesRepo.listEdgesByProject(current.projectId);
-        const edges = allEdges.map((e) => ({ sourceNodeId: e.sourceNodeId, targetNodeId: e.targetNodeId }));
-
-        // `setNode` must be the LAST state update here: it's what flips the `!node` guard
-        // below and mounts <NodeForm>, which only reads `initialValues` once (on mount, via
-        // useState's initializer). Setting it before the other state was ready meant NodeForm
-        // mounted with an empty `initialPrerequisiteIds` — every save then wiped the node's
-        // real prerequisite edges, regardless of what the user actually touched.
-        setExistingEdges(edges);
-        setInitialPrerequisiteIds(allEdges.filter((e) => e.targetNodeId === id).map((e) => e.sourceNodeId));
-        setNode(current);
-      })();
-    }, [id])
-  );
-
-  if (!node) return <ThemedView style={{ flex: 1 }} />;
-
-  const handleAutosave = async (values: NodeFormValues) => {
-    await nodesRepo.updateNode(id, {
-      title: values.title,
-      description: values.description,
-      icon: values.icon,
-      type: 'task',
-    });
-  };
-
-  const handleMarkDone = async () => {
-    if (node.state === 'mastered') {
-      await markUnmastered(node.projectId, node.id);
-    } else if (node.state === 'available') {
-      await markMastered(node.id);
-    }
-    router.back();
-  };
-
-  const handleDelete = () => {
-    const dependentCount = directChildren(existingEdges, node.id).length;
-    const dependentWarning =
-      dependentCount > 0
-        ? `\n\n${dependentCount} ${dependentCount === 1 ? 'anderer Knoten verliert' : 'andere Knoten verlieren'} diese Voraussetzung.`
-        : '';
-
-    Alert.alert('Knoten löschen', `"${node.title}" unwiderruflich löschen?${dependentWarning}`, [
-      { text: 'Abbrechen', style: 'cancel' },
-      {
-        text: 'Löschen',
-        style: 'destructive',
-        onPress: async () => {
-          await nodesRepo.deleteNode(node.id);
-          // The deleted node may have been a dependent's last unmet prerequisite —
-          // recompute rather than leave it stuck on its old locked/available state.
-          await reevaluateProjectGraph(node.projectId);
-          router.back();
-        },
-      },
-    ]);
-  };
-
-  return (
-    <>
-      <Stack.Screen
-        options={{
-          title: node.title,
-          headerRight: () => (
-            <View style={{ flexDirection: 'row', gap: 16 }}>
-              {node.state !== 'locked' ? (
-                <Pressable onPress={handleMarkDone} hitSlop={8}>
-                  <IconSymbol name="checkmark.circle.fill" size={24} color={tint} />
-                </Pressable>
-              ) : null}
-              <Pressable onPress={handleDelete} hitSlop={8}>
-                <IconSymbol name="trash" size={24} color="#E5484D" />
-              </Pressable>
-            </View>
-          ),
-        }}
-      />
-      <NodeForm
-        candidatePrerequisites={[]}
-        existingEdges={existingEdges}
-        initialValues={{
-          title: node.title,
-          description: node.description,
-          icon: node.icon,
-          prerequisiteIds: initialPrerequisiteIds,
-        }}
-        onAutosave={handleAutosave}
-      />
-    </>
-  );
+  try {
+    const llm = getLlmClient();
+    const tree = await llm.generateSkillTree({ projectTitle, goalDescription });
+    return Response.json(tree, { headers: CORS_HEADERS });
+  } catch (error) {
+    console.error('generate-tree endpoint failed', error);
+    return Response.json({ error: 'Failed to generate a skill tree' }, { status: 502, headers: CORS_HEADERS });
+  }
 }
 </file>
 
@@ -4165,7 +4076,7 @@ export default function NewProjectScreen() {
 
   const finish = (projectId: string) => {
     setActiveProjectId(projectId);
-    router.back();
+    router.dismissTo('/tree');
   };
 
   const generate = async (values: ProjectFormValues) => {
@@ -4297,177 +4208,6 @@ const styles = StyleSheet.create({
     height: '100%',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-});
-</file>
-
-<file path="components/projects/project-form.tsx">
-import { useState } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, TextInput, Pressable, View } from 'react-native';
-import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioRecorder } from 'expo-audio';
-import { File } from 'expo-file-system';
-
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { useThemeColor } from '@/hooks/use-theme-color';
-import { isBackendConfigured } from '@/providers/tree-generator';
-import { getAudioTranscriberProvider } from '@/providers/audio-transcriber';
-
-// Raw recorder output (m4a/AAC container) sent under this mimeType — Gemini's documented inline
-// audio support only lists bare "audio/aac", not the mp4/m4a container name. Verified working.
-const GOAL_AUDIO_MIME_TYPE = 'audio/aac';
-
-export interface ProjectFormValues {
-  name: string;
-  goalDescription: string;
-}
-
-interface ProjectFormProps {
-  initialValues?: ProjectFormValues;
-  submitLabel: string;
-  onSubmit: (values: ProjectFormValues) => void | Promise<void>;
-}
-
-export function ProjectForm({ initialValues, submitLabel, onSubmit }: ProjectFormProps) {
-  const [name, setName] = useState(initialValues?.name ?? '');
-  const [goalDescription, setGoalDescription] = useState(initialValues?.goalDescription ?? '');
-  const [isRecording, setIsRecording] = useState(false);
-  const [isTranscribing, setIsTranscribing] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
-
-  const textColor = useThemeColor({}, 'text');
-  const tint = useThemeColor({}, 'tint');
-  const tintText = useThemeColor({}, 'tintText');
-  const borderColor = useThemeColor({ light: '#E0E0E0', dark: '#333' }, 'text');
-
-  const canSubmit = name.trim().length > 0 && !submitting && !isRecording && !isTranscribing;
-
-  const handleSubmit = async () => {
-    if (!canSubmit) return;
-    setSubmitting(true);
-    try {
-      await onSubmit({ name: name.trim(), goalDescription: goalDescription.trim() });
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleMicPress = async () => {
-    if (isRecording) {
-      await recorder.stop();
-      setIsRecording(false);
-      const uri = recorder.uri;
-      if (!uri) return;
-
-      setIsTranscribing(true);
-      try {
-        const base64 = await new File(uri).base64();
-        const { text } = await getAudioTranscriberProvider().transcribe({ base64, mimeType: GOAL_AUDIO_MIME_TYPE });
-        // Append rather than replace — repeat recordings accumulate, manual edits aren't clobbered.
-        setGoalDescription((prev) => (prev.trim().length > 0 ? `${prev.trim()} ${text}` : text));
-      } catch (error) {
-        console.error('audio transcription failed', error);
-        Alert.alert('Transkription fehlgeschlagen', 'Die Sprachaufnahme konnte nicht in Text umgewandelt werden. Erneut versuchen?');
-      } finally {
-        setIsTranscribing(false);
-      }
-      return;
-    }
-
-    const permission = await AudioModule.requestRecordingPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert('Mikrofon-Zugriff verweigert', 'Erlaube den Mikrofon-Zugriff in den Systemeinstellungen, um dein Ziel per Sprachaufnahme zu beschreiben.');
-      return;
-    }
-    await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-    await recorder.prepareToRecordAsync();
-    recorder.record();
-    setIsRecording(true);
-  };
-
-  return (
-    <ThemedView style={styles.container}>
-      <ThemedText type="defaultSemiBold" style={styles.label}>
-        Name
-      </ThemedText>
-      <TextInput
-        value={name}
-        onChangeText={setName}
-        placeholder="z. B. Auslandssemester in Shanghai"
-        placeholderTextColor="#888"
-        style={[styles.input, { color: textColor, borderColor }]}
-      />
-
-      <View style={styles.goalHeaderRow}>
-        <ThemedText type="defaultSemiBold" style={styles.label}>
-          Ziel
-        </ThemedText>
-        {isBackendConfigured() &&
-          (isTranscribing ? (
-            <ActivityIndicator size="small" color={tint} />
-          ) : (
-            <Pressable onPress={handleMicPress} hitSlop={8}>
-              <IconSymbol name={isRecording ? 'stop.fill' : 'mic.fill'} size={22} color={isRecording ? '#E5484D' : tint} />
-            </Pressable>
-          ))}
-      </View>
-      <TextInput
-        value={goalDescription}
-        onChangeText={setGoalDescription}
-        placeholder="Was willst du erreichen?"
-        placeholderTextColor="#888"
-        multiline
-        numberOfLines={4}
-        style={[styles.input, styles.multiline, { color: textColor, borderColor }]}
-      />
-
-      <Pressable
-        onPress={handleSubmit}
-        disabled={!canSubmit}
-        style={[styles.button, { backgroundColor: tint, opacity: canSubmit ? 1 : 0.5 }]}>
-        <ThemedText style={[styles.buttonLabel, { color: tintText }]}>{submitLabel}</ThemedText>
-      </Pressable>
-    </ThemedView>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: {
-    padding: 20,
-    gap: 8,
-  },
-  label: {
-    marginTop: 12,
-  },
-  goalHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  input: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 12,
-    borderCurve: 'continuous',
-    padding: 12,
-    fontSize: 16,
-  },
-  multiline: {
-    minHeight: 100,
-    textAlignVertical: 'top',
-  },
-  button: {
-    marginTop: 24,
-    paddingVertical: 14,
-    borderRadius: 14,
-    borderCurve: 'continuous',
-    alignItems: 'center',
-  },
-  buttonLabel: {
-    fontWeight: '600',
-    fontSize: 16,
   },
 });
 </file>
@@ -4855,78 +4595,6 @@ describe('computeLayout', () => {
     expect(countCrossings(edges, result.positions, result.edgeWaypoints)).toBe(0);
   });
 });
-</file>
-
-<file path="components/ui/icon-symbol.tsx">
-// Fallback for using MaterialIcons on Android and web.
-
-import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { SymbolWeight, SymbolViewProps } from 'expo-symbols';
-import { ComponentProps } from 'react';
-import { OpaqueColorValue, type StyleProp, type TextStyle } from 'react-native';
-
-type IconMapping = Record<SymbolViewProps['name'], ComponentProps<typeof MaterialIcons>['name']>;
-type IconSymbolName = keyof typeof MAPPING;
-
-/**
- * Add your SF Symbols to Material Icons mappings here.
- * - see Material Icons in the [Icons Directory](https://icons.expo.fyi).
- * - see SF Symbols in the [SF Symbols](https://developer.apple.com/sf-symbols/) app.
- */
-const MAPPING = {
-  'house.fill': 'home',
-  'paperplane.fill': 'send',
-  'chevron.left.forwardslash.chevron.right': 'code',
-  'chevron.right': 'chevron-right',
-  'chevron.left': 'chevron-left',
-  'chevron.down': 'expand-more',
-  'folder.fill': 'folder',
-  'hexagon.fill': 'hexagon',
-  'person.fill': 'person',
-  'plus': 'add',
-  'plus.circle.fill': 'add-circle',
-  'xmark': 'close',
-  'xmark.circle.fill': 'cancel',
-  'pencil': 'edit',
-  'trash': 'delete',
-  'trash.fill': 'delete',
-  'gear': 'settings',
-  'checkmark': 'check',
-  'checkmark.circle.fill': 'check-circle',
-  'lock.fill': 'lock',
-  'lock.open.fill': 'lock-open',
-  'sparkles': 'auto-awesome',
-  'square.fill': 'crop-square',
-  'questionmark.circle': 'help-outline',
-  'arrow.up': 'arrow-upward',
-  'ellipsis': 'more-horiz',
-  'archivebox.fill': 'archive',
-  'arrow.uturn.backward': 'undo',
-  'line.3.horizontal': 'menu',
-  'magnifyingglass': 'search',
-  'mic.fill': 'mic',
-  'stop.fill': 'stop',
-} as IconMapping;
-
-/**
- * An icon component that uses native SF Symbols on iOS, and Material Icons on Android and web.
- * This ensures a consistent look across platforms, and optimal resource usage.
- * Icon `name`s are based on SF Symbols and require manual mapping to Material Icons.
- */
-export function IconSymbol({
-  name,
-  size = 24,
-  color,
-  style,
-}: {
-  name: IconSymbolName;
-  size?: number;
-  color: string | OpaqueColorValue;
-  style?: StyleProp<TextStyle>;
-  weight?: SymbolWeight;
-}) {
-  return <MaterialIcons color={color} size={size} name={MAPPING[name]} style={style} />;
-}
 </file>
 
 <file path="constants/skill-icons.ts">
@@ -7964,52 +7632,275 @@ export function getQuestGiverProvider(): QuestGiverProvider {
 }
 </file>
 
-<file path="app/(tabs)/profile.tsx">
-import { useState } from 'react';
-import { Alert, Pressable, StyleSheet } from 'react-native';
-import { router } from 'expo-router';
+<file path="providers/tree-generator/index.ts">
+import type { TreeGeneratorProvider } from './types';
+import { MockTreeGeneratorProvider } from './mock-provider';
+import { BackendTreeGeneratorProvider } from './backend-provider';
+
+let instance: TreeGeneratorProvider | null = null;
+
+/**
+ * Single swap point. Defaults to the offline mock. Set EXPO_PUBLIC_LLM_BACKEND_URL
+ * once /api/generate-tree is actually deployed to switch to the real backend — no
+ * other call site changes.
+ */
+export function getTreeGeneratorProvider(): TreeGeneratorProvider {
+  if (!instance) {
+    const backendUrl = process.env.EXPO_PUBLIC_LLM_BACKEND_URL;
+    instance = backendUrl ? new BackendTreeGeneratorProvider(backendUrl) : new MockTreeGeneratorProvider();
+  }
+  return instance;
+}
+
+/** Audio input needs a real LLM to listen to it — the offline mock provider can't use it. */
+export function isBackendConfigured(): boolean {
+  return !!process.env.EXPO_PUBLIC_LLM_BACKEND_URL;
+}
+</file>
+
+<file path="server/llm/index.ts">
+import type { LlmClient } from './types';
+import { GeminiClient } from './gemini-client';
+
+const DEFAULT_GEMINI_ENDPOINT =
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent';
+// Cheaper, faster tier — transcription is plain "audio in, text out", no tree reasoning needed.
+const DEFAULT_GEMINI_TRANSCRIBE_ENDPOINT =
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent';
+
+/**
+ * Server-only vendor selection. Swapping LLM providers is an env-var + implementation
+ * change here — the app client and the /api/quest-giver contract never change.
+ */
+export function getLlmClient(): LlmClient {
+  const provider = process.env.LLM_PROVIDER ?? 'gemini';
+  const apiKey = process.env.LLM_API_KEY;
+  const endpoint = process.env.LLM_ENDPOINT ?? DEFAULT_GEMINI_ENDPOINT;
+  const transcribeEndpoint = process.env.LLM_TRANSCRIBE_ENDPOINT ?? DEFAULT_GEMINI_TRANSCRIBE_ENDPOINT;
+
+  if (!apiKey) {
+    throw new Error('LLM_API_KEY is not set. Configure it as a server-only env var — never bundle it into the client.');
+  }
+
+  switch (provider) {
+    case 'gemini':
+      return new GeminiClient(apiKey, endpoint, transcribeEndpoint);
+    default:
+      throw new Error(`Unknown LLM_PROVIDER "${provider}"`);
+  }
+}
+</file>
+
+<file path="app.json">
+{
+  "expo": {
+    "name": "skill-tree",
+    "slug": "skill-tree",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "skilltree",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundImage": "./assets/images/android-icon-background.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "output": "server",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff",
+          "dark": {
+            "backgroundColor": "#000000"
+          }
+        }
+      ],
+      "expo-sqlite",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Erlaube den Zugriff auf das Mikrofon, um dein Ziel per Sprachaufnahme zu beschreiben."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}
+</file>
+
+<file path="package.json">
+{
+  "name": "skill-tree",
+  "main": "expo-router/entry",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "expo start",
+    "reset-project": "node ./scripts/reset-project.js",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "lint": "expo lint",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^15.0.3",
+    "@react-navigation/bottom-tabs": "^7.4.0",
+    "@react-navigation/elements": "^2.6.3",
+    "@react-navigation/native": "^7.1.8",
+    "expo": "~54.0.35",
+    "expo-audio": "~1.1.1",
+    "expo-blur": "~15.0.8",
+    "expo-constants": "~18.0.13",
+    "expo-crypto": "~15.0.9",
+    "expo-file-system": "~19.0.23",
+    "expo-font": "~14.0.12",
+    "expo-glass-effect": "~0.1.10",
+    "expo-haptics": "~15.0.8",
+    "expo-image": "~3.0.11",
+    "expo-linking": "~8.0.12",
+    "expo-router": "~6.0.24",
+    "expo-splash-screen": "~31.0.13",
+    "expo-sqlite": "~16.0.10",
+    "expo-status-bar": "~3.0.9",
+    "expo-symbols": "~1.0.8",
+    "expo-system-ui": "~6.0.9",
+    "expo-web-browser": "~15.0.11",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-gesture-handler": "~2.28.0",
+    "react-native-reanimated": "~4.1.1",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-screens": "~4.16.0",
+    "react-native-svg": "15.12.1",
+    "react-native-web": "~0.21.0",
+    "react-native-worklets": "0.5.1"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "@types/react": "~19.1.0",
+    "eslint": "^9.25.0",
+    "eslint-config-expo": "~10.0.0",
+    "jest": "~29.7.0",
+    "jest-expo": "~54.0.17",
+    "typescript": "~5.9.2"
+  },
+  "private": true,
+  "jest": {
+    "preset": "jest-expo",
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/app-example/"
+    ]
+  }
+}
+</file>
+
+<file path="app/(tabs)/index.tsx">
+import { useCallback, useState } from 'react';
+import { FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { router, useFocusEffect } from 'expo-router';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { IconSymbol } from '@/components/ui/icon-symbol';
+import { ScreenHeader } from '@/components/ui/screen-header';
+import { ConfirmModal } from '@/components/ui/confirm-modal';
+import { ProjectListItem } from '@/components/projects/project-list-item';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { useActiveProjectId } from '@/hooks/use-active-project-id';
-import { importSkillTree, type ImportPayload } from '@/db/import-skill-tree';
-import shanghaiFixture from '@/fixtures/shanghai-semester.json';
+import * as projectsRepo from '@/db/repositories/projects-repo';
+import type { Project } from '@/db/types';
 
-export default function ProfileScreen() {
-  const [, setActiveProjectId] = useActiveProjectId();
-  const [loading, setLoading] = useState(false);
+export default function ProjectsScreen() {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [activeProjectId, setActiveProjectId] = useActiveProjectId();
+  const [pendingDelete, setPendingDelete] = useState<Project | null>(null);
   const tint = useThemeColor({}, 'tint');
-  const tintText = useThemeColor({}, 'tintText');
+  const borderColor = useThemeColor({ light: '#E0E0E0', dark: '#2A2A2A' }, 'text');
 
-  const handleLoadFixture = async () => {
-    setLoading(true);
-    try {
-      const projectId = await importSkillTree(shanghaiFixture as ImportPayload);
-      setActiveProjectId(projectId);
-      router.push('/(tabs)/tree');
-    } catch (error) {
-      Alert.alert('Import fehlgeschlagen', error instanceof Error ? error.message : String(error));
-    } finally {
-      setLoading(false);
-    }
+  const reload = useCallback(async () => {
+    const list = await projectsRepo.listProjects(true);
+    setProjects(list);
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      reload();
+    }, [reload])
+  );
+
+  const handleDelete = (project: Project) => setPendingDelete(project);
+
+  const handleConfirmDelete = async () => {
+    if (!pendingDelete) return;
+    const projectId = pendingDelete.id;
+    setPendingDelete(null);
+    await projectsRepo.deleteProject(projectId);
+    if (activeProjectId === projectId) setActiveProjectId(null);
+    reload();
+  };
+
+  const handleSelect = (project: Project) => {
+    setActiveProjectId(project.id);
+    router.push('/(tabs)/tree');
   };
 
   return (
     <ThemedView style={styles.container}>
-      <ThemedText type="title">Profile</ThemedText>
+      <ScreenHeader title="Projekte" />
 
-      <ThemedText type="defaultSemiBold" style={styles.sectionLabel}>
-        Debug-Tools
-      </ThemedText>
-      <Pressable
-        onPress={handleLoadFixture}
-        disabled={loading}
-        style={[styles.button, { backgroundColor: tint, opacity: loading ? 0.6 : 1 }]}>
-        <ThemedText style={[styles.buttonLabel, { color: tintText }]}>
-          {loading ? 'Lädt…' : 'Beispiel-Skilltree laden (Shanghai-Fixture)'}
-        </ThemedText>
-      </Pressable>
+      <View style={styles.body}>
+        <FlatList
+          data={projects}
+          keyExtractor={(p) => p.id}
+          contentContainerStyle={styles.list}
+          renderItem={({ item }) => (
+            <ProjectListItem
+              project={item}
+              onSelect={() => handleSelect(item)}
+              onEdit={() => router.push(`/project/${item.id}/edit`)}
+              onDelete={() => handleDelete(item)}
+            />
+          )}
+          ListFooterComponent={
+            <Pressable onPress={() => router.push('/project/new')} style={[styles.createCard, { borderColor }]}>
+              <IconSymbol name="plus.circle.fill" size={28} color={tint} />
+              <ThemedText type="defaultSemiBold">Projekt anlegen</ThemedText>
+            </Pressable>
+          }
+        />
+      </View>
+
+      <ConfirmModal
+        visible={!!pendingDelete}
+        title="Projekt löschen"
+        message={`"${pendingDelete?.name}" und alle Knoten unwiderruflich löschen?`}
+        confirmLabel="Löschen"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
     </ThemedView>
   );
 }
@@ -8017,20 +7908,406 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  body: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+  },
+  list: {
+    paddingBottom: 120,
+  },
+  createCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 14,
+    minHeight: 76,
+    borderRadius: 14,
+    borderCurve: 'continuous',
+    borderWidth: StyleSheet.hairlineWidth,
+    gap: 12,
+  },
+});
+</file>
+
+<file path="app/node/[id]/edit.tsx">
+import { useCallback, useState } from 'react';
+import { Pressable, View } from 'react-native';
+import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
+
+import { NodeForm, type NodeFormValues } from '@/components/skill-tree/node-form';
+import { ThemedView } from '@/components/themed-view';
+import { IconSymbol } from '@/components/ui/icon-symbol';
+import { ConfirmModal } from '@/components/ui/confirm-modal';
+import { useThemeColor } from '@/hooks/use-theme-color';
+import * as nodesRepo from '@/db/repositories/nodes-repo';
+import * as edgesRepo from '@/db/repositories/edges-repo';
+import { directChildren, type UnlockEdge } from '@/domain/unlock';
+import { markMastered, markUnmastered, reevaluateProjectGraph } from '@/domain/mastery';
+import type { SkillNode } from '@/db/types';
+
+export default function EditNodeScreen() {
+  const { id } = useLocalSearchParams<{ id: string }>();
+  const [node, setNode] = useState<SkillNode | null>(null);
+  const [existingEdges, setExistingEdges] = useState<UnlockEdge[]>([]);
+  const [initialPrerequisiteIds, setInitialPrerequisiteIds] = useState<string[]>([]);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const tint = useThemeColor({}, 'tint');
+
+  useFocusEffect(
+    useCallback(() => {
+      (async () => {
+        const current = await nodesRepo.getNode(id);
+        if (!current) return;
+
+        const allEdges = await edgesRepo.listEdgesByProject(current.projectId);
+        const edges = allEdges.map((e) => ({ sourceNodeId: e.sourceNodeId, targetNodeId: e.targetNodeId }));
+
+        // `setNode` must be the LAST state update here: it's what flips the `!node` guard
+        // below and mounts <NodeForm>, which only reads `initialValues` once (on mount, via
+        // useState's initializer). Setting it before the other state was ready meant NodeForm
+        // mounted with an empty `initialPrerequisiteIds` — every save then wiped the node's
+        // real prerequisite edges, regardless of what the user actually touched.
+        setExistingEdges(edges);
+        setInitialPrerequisiteIds(allEdges.filter((e) => e.targetNodeId === id).map((e) => e.sourceNodeId));
+        setNode(current);
+      })();
+    }, [id])
+  );
+
+  if (!node) return <ThemedView style={{ flex: 1 }} />;
+
+  const handleAutosave = async (values: NodeFormValues) => {
+    await nodesRepo.updateNode(id, {
+      title: values.title,
+      description: values.description,
+      icon: values.icon,
+      type: 'task',
+    });
+  };
+
+  const handleMarkDone = async () => {
+    if (node.state === 'mastered') {
+      await markUnmastered(node.projectId, node.id);
+    } else if (node.state === 'available') {
+      await markMastered(node.id);
+    }
+    router.back();
+  };
+
+  const dependentCount = directChildren(existingEdges, node.id).length;
+  const dependentWarning =
+    dependentCount > 0
+      ? `\n\n${dependentCount} ${dependentCount === 1 ? 'anderer Knoten verliert' : 'andere Knoten verlieren'} diese Voraussetzung.`
+      : '';
+
+  const handleConfirmDelete = async () => {
+    setConfirmingDelete(false);
+    await nodesRepo.deleteNode(node.id);
+    // The deleted node may have been a dependent's last unmet prerequisite —
+    // recompute rather than leave it stuck on its old locked/available state.
+    await reevaluateProjectGraph(node.projectId);
+    router.back();
+  };
+
+  return (
+    <>
+      <Stack.Screen
+        options={{
+          title: node.title,
+          headerRight: () => (
+            <View style={{ flexDirection: 'row', gap: 16 }}>
+              {node.state !== 'locked' ? (
+                <Pressable onPress={handleMarkDone} hitSlop={8}>
+                  <IconSymbol name="checkmark.circle.fill" size={24} color={tint} />
+                </Pressable>
+              ) : null}
+              <Pressable onPress={() => setConfirmingDelete(true)} hitSlop={8}>
+                <IconSymbol name="trash" size={24} color="#E5484D" />
+              </Pressable>
+            </View>
+          ),
+        }}
+      />
+      <NodeForm
+        candidatePrerequisites={[]}
+        existingEdges={existingEdges}
+        initialValues={{
+          title: node.title,
+          description: node.description,
+          icon: node.icon,
+          prerequisiteIds: initialPrerequisiteIds,
+        }}
+        onAutosave={handleAutosave}
+        primaryAction={node.state !== 'locked' ? { label: 'Erledigt', onPress: handleMarkDone } : undefined}
+      />
+      <ConfirmModal
+        visible={confirmingDelete}
+        title="Knoten löschen"
+        message={`"${node.title}" unwiderruflich löschen?${dependentWarning}`}
+        confirmLabel="Löschen"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setConfirmingDelete(false)}
+      />
+    </>
+  );
+}
+</file>
+
+<file path="components/projects/project-form.tsx">
+import { useState } from 'react';
+import { ActivityIndicator, Alert, Platform, StyleSheet, TextInput, Pressable, View } from 'react-native';
+import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioRecorder } from 'expo-audio';
+import { File } from 'expo-file-system';
+
+import { ThemedText } from '@/components/themed-text';
+import { ThemedView } from '@/components/themed-view';
+import { IconSymbol } from '@/components/ui/icon-symbol';
+import { useThemeColor } from '@/hooks/use-theme-color';
+import { isBackendConfigured } from '@/providers/tree-generator';
+import { getAudioTranscriberProvider } from '@/providers/audio-transcriber';
+
+// Raw recorder output (m4a/AAC container) sent under this mimeType — Gemini's documented inline
+// audio support only lists bare "audio/aac", not the mp4/m4a container name. Verified working.
+const GOAL_AUDIO_MIME_TYPE = 'audio/aac';
+
+export interface ProjectFormValues {
+  name: string;
+  goalDescription: string;
+}
+
+interface ProjectFormProps {
+  initialValues?: ProjectFormValues;
+  submitLabel: string;
+  onSubmit: (values: ProjectFormValues) => void | Promise<void>;
+}
+
+export function ProjectForm({ initialValues, submitLabel, onSubmit }: ProjectFormProps) {
+  const [name, setName] = useState(initialValues?.name ?? '');
+  const [goalDescription, setGoalDescription] = useState(initialValues?.goalDescription ?? '');
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+
+  const textColor = useThemeColor({}, 'text');
+  const tint = useThemeColor({}, 'tint');
+  const tintText = useThemeColor({}, 'tintText');
+  const borderColor = useThemeColor({ light: '#E0E0E0', dark: '#333' }, 'text');
+
+  const canSubmit = name.trim().length > 0 && !submitting && !isRecording && !isTranscribing;
+  // expo-file-system's File class (used to read the recording back out as base64) doesn't
+  // support web — recording produces a blob URL there, not a native file path.
+  const canRecordAudio = isBackendConfigured() && Platform.OS !== 'web';
+
+  const handleSubmit = async () => {
+    if (!canSubmit) return;
+    setSubmitting(true);
+    try {
+      await onSubmit({ name: name.trim(), goalDescription: goalDescription.trim() });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleMicPress = async () => {
+    if (isRecording) {
+      await recorder.stop();
+      setIsRecording(false);
+      const uri = recorder.uri;
+      if (!uri) return;
+
+      setIsTranscribing(true);
+      try {
+        const base64 = await new File(uri).base64();
+        const { text } = await getAudioTranscriberProvider().transcribe({ base64, mimeType: GOAL_AUDIO_MIME_TYPE });
+        // Append rather than replace — repeat recordings accumulate, manual edits aren't clobbered.
+        setGoalDescription((prev) => (prev.trim().length > 0 ? `${prev.trim()} ${text}` : text));
+      } catch (error) {
+        console.error('audio transcription failed', error);
+        Alert.alert('Transkription fehlgeschlagen', 'Die Sprachaufnahme konnte nicht in Text umgewandelt werden. Erneut versuchen?');
+      } finally {
+        setIsTranscribing(false);
+      }
+      return;
+    }
+
+    const permission = await AudioModule.requestRecordingPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Mikrofon-Zugriff verweigert', 'Erlaube den Mikrofon-Zugriff in den Systemeinstellungen, um dein Ziel per Sprachaufnahme zu beschreiben.');
+      return;
+    }
+    await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+    await recorder.prepareToRecordAsync();
+    recorder.record();
+    setIsRecording(true);
+  };
+
+  return (
+    <ThemedView style={styles.container}>
+      <ThemedText type="defaultSemiBold" style={styles.label}>
+        Name
+      </ThemedText>
+      <TextInput
+        value={name}
+        onChangeText={setName}
+        placeholder="z. B. Auslandssemester in Shanghai"
+        placeholderTextColor="#888"
+        style={[styles.input, { color: textColor, borderColor }]}
+      />
+
+      <ThemedText type="defaultSemiBold" style={styles.label}>
+        Ziel
+      </ThemedText>
+      <View style={styles.goalInputWrapper}>
+        <TextInput
+          value={goalDescription}
+          onChangeText={setGoalDescription}
+          placeholder="Was willst du erreichen?"
+          placeholderTextColor="#888"
+          multiline
+          numberOfLines={4}
+          style={[styles.input, styles.multiline, canRecordAudio && styles.goalInput, { color: textColor, borderColor }]}
+        />
+        {canRecordAudio && (
+          <View style={styles.micButton}>
+            {isTranscribing ? (
+              <ActivityIndicator size="small" color={tint} />
+            ) : (
+              <Pressable onPress={handleMicPress} hitSlop={8}>
+                <IconSymbol name={isRecording ? 'stop.fill' : 'mic.fill'} size={22} color={isRecording ? '#E5484D' : tint} />
+              </Pressable>
+            )}
+          </View>
+        )}
+      </View>
+
+      <Pressable
+        onPress={handleSubmit}
+        disabled={!canSubmit}
+        style={[styles.button, { backgroundColor: tint, opacity: canSubmit ? 1 : 0.5 }]}>
+        <ThemedText style={[styles.buttonLabel, { color: tintText }]}>{submitLabel}</ThemedText>
+      </Pressable>
+    </ThemedView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
     padding: 20,
-    paddingTop: 60,
     gap: 8,
   },
-  sectionLabel: { marginTop: 24 },
+  label: {
+    marginTop: 12,
+  },
+  input: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    borderCurve: 'continuous',
+    padding: 12,
+    fontSize: 16,
+  },
+  multiline: {
+    minHeight: 100,
+    textAlignVertical: 'top',
+  },
+  goalInputWrapper: {
+    position: 'relative',
+  },
+  goalInput: {
+    paddingRight: 44,
+  },
+  micButton: {
+    position: 'absolute',
+    right: 10,
+    bottom: 10,
+  },
   button: {
-    marginTop: 8,
+    marginTop: 24,
     paddingVertical: 14,
     borderRadius: 14,
     borderCurve: 'continuous',
     alignItems: 'center',
   },
-  buttonLabel: { fontWeight: '600', fontSize: 15 },
+  buttonLabel: {
+    fontWeight: '600',
+    fontSize: 16,
+  },
 });
+</file>
+
+<file path="components/ui/icon-symbol.tsx">
+// Fallback for using MaterialIcons on Android and web.
+
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { SymbolWeight, SymbolViewProps } from 'expo-symbols';
+import { ComponentProps } from 'react';
+import { OpaqueColorValue, type StyleProp, type TextStyle } from 'react-native';
+
+type IconMapping = Record<SymbolViewProps['name'], ComponentProps<typeof MaterialIcons>['name']>;
+export type IconSymbolName = keyof typeof MAPPING;
+
+/**
+ * Add your SF Symbols to Material Icons mappings here.
+ * - see Material Icons in the [Icons Directory](https://icons.expo.fyi).
+ * - see SF Symbols in the [SF Symbols](https://developer.apple.com/sf-symbols/) app.
+ */
+const MAPPING = {
+  'house.fill': 'home',
+  'paperplane.fill': 'send',
+  'chevron.left.forwardslash.chevron.right': 'code',
+  'chevron.right': 'chevron-right',
+  'chevron.left': 'chevron-left',
+  'chevron.down': 'expand-more',
+  'folder.fill': 'folder',
+  'hexagon.fill': 'hexagon',
+  'person.fill': 'person',
+  'plus': 'add',
+  'plus.circle.fill': 'add-circle',
+  'xmark': 'close',
+  'xmark.circle.fill': 'cancel',
+  'pencil': 'edit',
+  'trash': 'delete',
+  'trash.fill': 'delete',
+  'gear': 'settings',
+  'checkmark': 'check',
+  'checkmark.circle.fill': 'check-circle',
+  'lock.fill': 'lock',
+  'lock.open.fill': 'lock-open',
+  'sparkles': 'auto-awesome',
+  'square.fill': 'crop-square',
+  'questionmark.circle': 'help-outline',
+  'arrow.up': 'arrow-upward',
+  'ellipsis': 'more-horiz',
+  'archivebox.fill': 'archive',
+  'arrow.uturn.backward': 'undo',
+  'line.3.horizontal': 'menu',
+  'magnifyingglass': 'search',
+  'mic.fill': 'mic',
+  'stop.fill': 'stop',
+} as IconMapping;
+
+/**
+ * An icon component that uses native SF Symbols on iOS, and Material Icons on Android and web.
+ * This ensures a consistent look across platforms, and optimal resource usage.
+ * Icon `name`s are based on SF Symbols and require manual mapping to Material Icons.
+ */
+export function IconSymbol({
+  name,
+  size = 24,
+  color,
+  style,
+}: {
+  name: IconSymbolName;
+  size?: number;
+  color: string | OpaqueColorValue;
+  style?: StyleProp<TextStyle>;
+  weight?: SymbolWeight;
+}) {
+  return <MaterialIcons color={color} size={size} name={MAPPING[name]} style={style} />;
+}
 </file>
 
 <file path="constants/skill-tree-theme.ts">
@@ -8065,6 +8342,24 @@ export const SkillTreeColors = {
       border: '#FACC15',
       opacity: 1,
       glow: 'rgba(250, 204, 21, 0.55)',
+    },
+  },
+
+  /** Header / tab bar chrome — fixed dark "obsidian + silver metal" look, not theme-following
+   * (same reasoning as `label` above: this chrome sits directly on the app's purple tree
+   * background, so it must stay legible regardless of the light/dark toggle). */
+  chrome: {
+    background: '#1A1025',
+    metalBorder: '#8B95A1',
+    metalBorderDim: '#4B5563',
+    rune: {
+      active: '#4FC3F7',
+      glow: 'rgba(79, 195, 247, 0.35)',
+    },
+    crystal: {
+      core: '#B91C1C',
+      ring: '#FF4D4D',
+      glow: 'rgba(255, 77, 77, 0.3)',
     },
   },
 } as const;
@@ -9177,142 +9472,6 @@ export interface QuestGiverProvider {
 }
 </file>
 
-<file path="CLAUDE.md">
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-@AGENTS.md
-
-This file is the source of truth. If code and this file disagree, treat the code as a bug to fix,
-not a reason to ignore this file — unless the divergence is the known Capstone/passive-bonus
-legacy called out in the migration note below.
-
-## Project
-
-Skill Tree — Expo/React Native (SDK 54) app that turns a goal into a dependency-gated tree of
-tasks. Nodes start `locked`/`available` and flip to `mastered`; mastering a node re-evaluates its
-direct children and unlocks the ones whose prerequisites are now all satisfied. Local-first: all
-state lives in on-device SQLite (`expo-sqlite`), no user accounts yet.
-
-Creating a project (`app/project/new.tsx`) with a meaningful title + goal description triggers a
-one-shot LLM call (`providers/tree-generator/`) that generates a full skill tree, persisted via
-`db/import-skill-tree.ts`. The older "KI-Orb" (AI orb, `providers/quest-giver/`) that suggested one
-next step at a time is **disabled bis auf Weiteres** — its entry points are commented out in
-`app/(tabs)/tree.tsx` and `app/_layout.tsx`, code otherwise left intact and reachable again by
-uncommenting those two spots.
-
-## Commands
-
-```bash
-npm run start          # expo start (Metro, pick platform interactively)
-npm run android        # expo start --android
-npm run ios            # expo start --ios
-npm run web            # expo start --web
-npm run lint           # expo lint (eslint-config-expo flat config)
-npm test               # jest (jest-expo preset)
-npx jest domain/unlock.test.ts          # single test file
-npx jest -t "resolves a diamond graph"  # single test by name
-npx tsc --noEmit       # typecheck (no dedicated script exists)
-```
-
-## Architecture — strict layering
-
-One-directional: `ui (app/, components/) -> viewmodel/ -> domain/ -> db/repositories/ -> db/client.ts`.
-Screens never write raw SQL; they call repositories or domain functions. Do not skip a layer.
-
-- **`db/schema.ts`** — migration runner keyed off `PRAGMA user_version`. Add a migration by
-  appending a SQL string to `MIGRATIONS` and bumping `SCHEMA_VERSION`; never edit a shipped one.
-- **`db/repositories/*`** — one file per table, maps `snake_case` rows to `camelCase` types from
-  `db/types.ts`. Only layer that touches `expo-sqlite`.
-- **`domain/unlock.ts`** — pure, DB-free graph logic. AND-only semantics: a node unlocks only when
-  *every* incoming edge points at a mastered node. Covered by `domain/unlock.test.ts` — extend
-  these tests directly when changing unlock semantics.
-- **`domain/mastery.ts`** — only place that mutates node state (`markMastered`, `markUnmastered`).
-- **`viewmodel/skill-tree-viewmodel.ts`** — renderer-agnostic `{ nodes, edges, loading, reload }`;
-  `components/skill-tree/tree-canvas.tsx` never touches the db directly. `layout.ts` computes tiers
-  by prerequisite depth at render time, not the stored `tier` column.
-
-### Gemini backend proxy (tree-generator, formerly KI-Orb)
-
-Three-layer indirection — no LLM vendor name leaks past the server boundary. Same pattern used by
-both the active tree-generator and the disabled quest-giver (KI-Orb):
-
-1. **`providers/tree-generator/`** — app-side contract for the one-shot full-tree generation.
-   `index.ts` is the one swap point: picks `MockTreeGeneratorProvider` (offline default) or
-   `BackendTreeGeneratorProvider` based on `EXPO_PUBLIC_LLM_BACKEND_URL`. Never call a concrete
-   provider from a screen directly. `providers/quest-giver/` is the same pattern for the disabled
-   single-step KI-Orb — dead code, left intact, shares the same env var.
-2. **`app/api/generate-tree+api.ts`** (active) / **`app/api/quest-giver+api.ts`** (dead code) —
-   server-only Expo Router API routes. Vendor-neutral body, string length caps, in-memory
-   per-process rate limit (no auth yet, so this is the only cost-abuse guard — read the comments
-   before touching limits).
-3. **`server/llm/`** — server-only vendor abstraction (`LlmClient`/`GeminiClient`,
-   `generateSkillTree`/`generateStructuredStep`). `LLM_PROVIDER`/`LLM_API_KEY`/`LLM_ENDPOINT` from
-   env. `LLM_API_KEY` stays server-only (never `EXPO_PUBLIC_` prefix), sent as a header, never a
-   query string. The system prompt used by `generateSkillTree` is supplied and de-gamified —
-   Baby-Step/cognitive-load decomposition, no RPG/quest/XP framing (`gemini-client.ts`).
-
-Preserve the vendor-neutral contract at each boundary — swapping the LLM vendor must stay confined
-to `server/llm/`.
-
-## Project scope & design — CURRENT RULES
-
-**Capstones and passive bonuses are cut.** The skill tree has exactly one node shape: **Task**
-(square). `NodeType` (`db/types.ts`) is `'task'` only — do not reintroduce an octagon/capstone or
-circle/passive-bonus variant, in the DB schema, the LLM contracts, or the renderer.
-
-- `db/schema.ts` migration 2 collapsed any pre-existing `'capstone'` rows to `'task'` and tightened
-  the `nodes.type` CHECK to `'task'` only — do not loosen it back.
-- Visual states for a Task node:
-  - `locked` — grey/matte, muted opacity, no animation.
-  - `available` — full color, pulsing (Reanimated `withRepeat`/`withSequence`).
-  - `mastered` — gold border with a glow effect (Reanimated), no pulse decay.
-- KI-Orb button (`components/orb/floating-orb.tsx`) uses the Liquid Glass effect
-  (`expo-glass-effect`, `GlassView` / `isLiquidGlassAvailable()`, falling back to `BlurView`) and
-  Apple SF Symbols via `IconSymbol` — currently unreachable, see the tree-generator note above.
-
-## Rendering technology — DO NOT CHANGE
-
-Skill tree rendering is **Views + `react-native-svg`** (connector lines only) **+ Reanimated v4**
-**+ `react-native-gesture-handler`** (pan/pinch on the canvas). This is a deliberate choice to keep
-native accessibility and haptics on plain Views.
-
-**Never introduce `react-native-skia`, WebGPU, or three.js** for the skill tree, in any PR, however
-small the ask.
-
-### CRITICAL: GestureHandlerRootView
-
-Any `GestureDetector` / `Gesture.Pan()` / `Gesture.Pinch()` usage crashes the app without a root
-wrapper. `app/_layout.tsx` already wraps the entire app in
-`<GestureHandlerRootView style={{ flex: 1 }}>` at the top, above `ThemeProvider` and the `Stack`.
-
-**Never remove this wrapper from `app/_layout.tsx`. Never move it down into an individual screen.**
-If a gesture crash appears, check this wrapper is still there and still at the root — don't add a
-second one somewhere else.
-
-## Env vars
-
-- `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_ENDPOINT` — server-only, read by `server/llm/index.ts`.
-- `EXPO_PUBLIC_LLM_BACKEND_URL` — client-visible; unset keeps the app on the offline mock provider
-  (used by both `providers/tree-generator/` and, if re-enabled, `providers/quest-giver/`).
-
-## Conventions
-
-- File names are kebab-case (`skill-tree-viewmodel.ts`, `node-form.tsx`), including components.
-- IDs are UUIDs via `db/uuid.ts`; timestamps are ISO strings, not epoch numbers.
-- Import via the `@/*` path alias, not relative `../../` chains.
-
-## Agent behavior / token efficiency
-
-RTK and Caveman run in the background for this user — always answer in Caveman style: short,
-dense, technical only, no filler. Code, commits, and PR text stay written normally (Caveman style
-applies to chat replies, not to file content).
-
-On API timeout or context overload: stop, don't keep guessing or retrying blind. Wait for the user
-to run `/compact` or `/clear`.
-</file>
-
 <file path="app/node/new.tsx">
 import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
@@ -9796,6 +9955,149 @@ export class MockQuestGiverProvider implements QuestGiverProvider {
 }
 </file>
 
+<file path="CLAUDE.md">
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+@AGENTS.md
+
+This file is the source of truth. If code and this file disagree, treat the code as a bug to fix,
+not a reason to ignore this file — unless the divergence is the known Capstone/passive-bonus
+legacy called out in the migration note below.
+
+## Project
+
+Skill Tree — Expo/React Native (SDK 54) app that turns a goal into a dependency-gated tree of
+tasks. Nodes start `locked`/`available` and flip to `mastered`; mastering a node re-evaluates its
+direct children and unlocks the ones whose prerequisites are now all satisfied. Local-first: all
+state lives in on-device SQLite (`expo-sqlite`), no user accounts yet.
+
+Creating a project (`app/project/new.tsx`) with a meaningful title + goal description triggers a
+one-shot LLM call (`providers/tree-generator/`) that generates a full skill tree, persisted via
+`db/import-skill-tree.ts`. The older "KI-Orb" (AI orb, `providers/quest-giver/`) that suggested one
+next step at a time is **disabled bis auf Weiteres** — its entry points are commented out in
+`app/(tabs)/tree.tsx` and `app/_layout.tsx`, code otherwise left intact and reachable again by
+uncommenting those two spots.
+
+## Commands
+
+```bash
+npm run start          # expo start (Metro, pick platform interactively)
+npm run android        # expo start --android
+npm run ios            # expo start --ios
+npm run web            # expo start --web
+npm run lint           # expo lint (eslint-config-expo flat config)
+npm test               # jest (jest-expo preset)
+npx jest domain/unlock.test.ts          # single test file
+npx jest -t "resolves a diamond graph"  # single test by name
+npx tsc --noEmit       # typecheck (no dedicated script exists)
+```
+
+## Architecture — strict layering
+
+One-directional: `ui (app/, components/) -> viewmodel/ -> domain/ -> db/repositories/ -> db/client.ts`.
+Screens never write raw SQL; they call repositories or domain functions. Do not skip a layer.
+
+- **`db/schema.ts`** — migration runner keyed off `PRAGMA user_version`. Add a migration by
+  appending a SQL string to `MIGRATIONS` and bumping `SCHEMA_VERSION`; never edit a shipped one.
+- **`db/repositories/*`** — one file per table, maps `snake_case` rows to `camelCase` types from
+  `db/types.ts`. Only layer that touches `expo-sqlite`.
+- **`domain/unlock.ts`** — pure, DB-free graph logic. AND-only semantics: a node unlocks only when
+  *every* incoming edge points at a mastered node. Covered by `domain/unlock.test.ts` — extend
+  these tests directly when changing unlock semantics.
+- **`domain/mastery.ts`** — only place that mutates node state (`markMastered`, `markUnmastered`).
+- **`viewmodel/skill-tree-viewmodel.ts`** — renderer-agnostic `{ nodes, edges, loading, reload }`;
+  `components/skill-tree/tree-canvas.tsx` never touches the db directly. `layout.ts` computes tiers
+  by prerequisite depth at render time, not the stored `tier` column.
+
+### Gemini backend proxy (tree-generator, formerly KI-Orb)
+
+Three-layer indirection — no LLM vendor name leaks past the server boundary. Same pattern used by
+both the active tree-generator and the disabled quest-giver (KI-Orb):
+
+1. **`providers/tree-generator/`** — app-side contract for the one-shot full-tree generation.
+   `index.ts` is the one swap point: picks `MockTreeGeneratorProvider` (offline default) or
+   `BackendTreeGeneratorProvider` based on `EXPO_PUBLIC_LLM_BACKEND_URL`. Never call a concrete
+   provider from a screen directly. `providers/quest-giver/` is the same pattern for the disabled
+   single-step KI-Orb — dead code, left intact, shares the same env var.
+2. **`app/api/generate-tree+api.ts`** (active) / **`app/api/quest-giver+api.ts`** (dead code) —
+   server-only Expo Router API routes. Vendor-neutral body, string length caps, in-memory
+   per-process rate limit (no auth yet, so this is the only cost-abuse guard — read the comments
+   before touching limits).
+3. **`server/llm/`** — server-only vendor abstraction (`LlmClient`/`GeminiClient`,
+   `generateSkillTree`/`generateStructuredStep`). `LLM_PROVIDER`/`LLM_API_KEY`/`LLM_ENDPOINT` from
+   env. `LLM_API_KEY` stays server-only (never `EXPO_PUBLIC_` prefix), sent as a header, never a
+   query string. The system prompt used by `generateSkillTree` is supplied and de-gamified —
+   Baby-Step/cognitive-load decomposition, no RPG/quest/XP framing (`gemini-client.ts`).
+
+Preserve the vendor-neutral contract at each boundary — swapping the LLM vendor must stay confined
+to `server/llm/`.
+
+### Gemini model selection
+
+Do not hardcode Gemini model names in feature code. Reuse the configured default endpoint from
+`server/llm/index.ts` first. Alternative models are allowed only as env overrides, not new code
+defaults. Do not introduce `gemini-2.5-*` model defaults; these caused 404s for new users. Before
+changing models, search existing `DEFAULT_GEMINI_*` constants and keep `tsc` + tests green.
+
+## Project scope & design — CURRENT RULES
+
+**Capstones and passive bonuses are cut.** The skill tree has exactly one node shape: **Task**
+(square). `NodeType` (`db/types.ts`) is `'task'` only — do not reintroduce an octagon/capstone or
+circle/passive-bonus variant, in the DB schema, the LLM contracts, or the renderer.
+
+- `db/schema.ts` migration 2 collapsed any pre-existing `'capstone'` rows to `'task'` and tightened
+  the `nodes.type` CHECK to `'task'` only — do not loosen it back.
+- Visual states for a Task node:
+  - `locked` — grey/matte, muted opacity, no animation.
+  - `available` — full color, pulsing (Reanimated `withRepeat`/`withSequence`).
+  - `mastered` — gold border with a glow effect (Reanimated), no pulse decay.
+- KI-Orb button (`components/orb/floating-orb.tsx`) uses the Liquid Glass effect
+  (`expo-glass-effect`, `GlassView` / `isLiquidGlassAvailable()`, falling back to `BlurView`) and
+  Apple SF Symbols via `IconSymbol` — currently unreachable, see the tree-generator note above.
+
+## Rendering technology — DO NOT CHANGE
+
+Skill tree rendering is **Views + `react-native-svg`** (connector lines only) **+ Reanimated v4**
+**+ `react-native-gesture-handler`** (pan/pinch on the canvas). This is a deliberate choice to keep
+native accessibility and haptics on plain Views.
+
+**Never introduce `react-native-skia`, WebGPU, or three.js** for the skill tree, in any PR, however
+small the ask.
+
+### CRITICAL: GestureHandlerRootView
+
+Any `GestureDetector` / `Gesture.Pan()` / `Gesture.Pinch()` usage crashes the app without a root
+wrapper. `app/_layout.tsx` already wraps the entire app in
+`<GestureHandlerRootView style={{ flex: 1 }}>` at the top, above `ThemeProvider` and the `Stack`.
+
+**Never remove this wrapper from `app/_layout.tsx`. Never move it down into an individual screen.**
+If a gesture crash appears, check this wrapper is still there and still at the root — don't add a
+second one somewhere else.
+
+## Env vars
+
+- `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_ENDPOINT` — server-only, read by `server/llm/index.ts`.
+- `EXPO_PUBLIC_LLM_BACKEND_URL` — client-visible; unset keeps the app on the offline mock provider
+  (used by both `providers/tree-generator/` and, if re-enabled, `providers/quest-giver/`).
+
+## Conventions
+
+- File names are kebab-case (`skill-tree-viewmodel.ts`, `node-form.tsx`), including components.
+- IDs are UUIDs via `db/uuid.ts`; timestamps are ISO strings, not epoch numbers.
+- Import via the `@/*` path alias, not relative `../../` chains.
+
+## Agent behavior / token efficiency
+
+RTK and Caveman run in the background for this user — always answer in Caveman style: short,
+dense, technical only, no filler. Code, commits, and PR text stay written normally (Caveman style
+applies to chat replies, not to file content).
+
+On API timeout or context overload: stop, don't keep guessing or retrying blind. Wait for the user
+to run `/compact` or `/clear`.
+</file>
+
 <file path="server/llm/types.ts">
 export interface LlmExistingNode {
   id: string;
@@ -10098,13 +10400,14 @@ const styles = StyleSheet.create({
 
 <file path="components/skill-tree/tree-canvas.tsx">
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
+import { Platform, Pressable, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import Svg, { Polyline } from 'react-native-svg';
 
 import { NodeGlyph } from './node-glyph';
 import { computeLayout } from './layout';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 import { SkillTreeColors } from '@/constants/skill-tree-theme';
 import type { SkillNode } from '@/db/types';
 import type { EdgeVM } from '@/viewmodel/skill-tree-viewmodel';
@@ -10151,6 +10454,11 @@ export function TreeCanvas({ nodes, edges, onNodePress, onNodeLongPress }: TreeC
   const savedTranslateY = useSharedValue(0);
   const savedScale = useSharedValue(1);
 
+  // Pan-lock: button-toggled, so it needs to live both as a shared value (read by the pan
+  // worklet on the UI thread) and as React state (drives the button's icon).
+  const [panLocked, setPanLocked] = useState(false);
+  const panLockedShared = useSharedValue(false);
+
   const handleContainerLayout = (e: LayoutChangeEvent) => {
     const { width: w, height: h } = e.nativeEvent.layout;
     setContainerSize({ width: w, height: h });
@@ -10195,7 +10503,8 @@ export function TreeCanvas({ nodes, edges, onNodePress, onNodeLongPress }: TreeC
 
   const panGesture = Gesture.Pan()
     .onUpdate((e) => {
-      translateX.value = savedTranslateX.value + e.translationX;
+      // Locked: only vertical scrolling stays live, horizontal panning freezes.
+      translateX.value = panLockedShared.value ? savedTranslateX.value : savedTranslateX.value + e.translationX;
       translateY.value = savedTranslateY.value + e.translationY;
     })
     .onEnd(() => {
@@ -10213,6 +10522,34 @@ export function TreeCanvas({ nodes, edges, onNodePress, onNodeLongPress }: TreeC
     });
 
   const composedGesture = Gesture.Simultaneous(panGesture, pinchGesture);
+
+  const handleCenterAndToggleLock = () => {
+    // Center on the *fitted* size, not the raw content size — a tree taller or wider than the
+    // viewport would otherwise center its bounding box while clipping the overflow off-screen
+    // (e.g. top tiers scrolled above the visible area), which reads as "stuck to one edge"
+    // rather than centered.
+    // Deliberately not clamped to MIN_SCALE: a tree wide/tall enough to need more shrinking than
+    // that would otherwise still overflow the viewport on one side after "centering", which reads
+    // as the tree being stuck against an edge rather than centered.
+    const fitScale = Math.min(1, containerSize.width / width, containerSize.height / height);
+    const nextScale = Math.min(MAX_SCALE, fitScale);
+    // `transform: [translate, scale]` scales around the view's own center (RN/web default
+    // transformOrigin), not its top-left corner — so the rendered top-left edge lands at
+    // `translate + size/2 * (1 - scale)`, not at `translate` alone. Subtract that offset so the
+    // *visible* box, not the pre-scale one, ends up centered.
+    const centerX = (containerSize.width - width * nextScale) / 2 - (width / 2) * (1 - nextScale);
+    const centerY = (containerSize.height - height * nextScale) / 2 - (height / 2) * (1 - nextScale);
+    translateX.value = centerX;
+    translateY.value = centerY;
+    savedTranslateX.value = centerX;
+    savedTranslateY.value = centerY;
+    scale.value = nextScale;
+    savedScale.value = nextScale;
+
+    const nextLocked = !panLocked;
+    panLockedShared.value = nextLocked;
+    setPanLocked(nextLocked);
+  };
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: translateX.value }, { translateY: translateY.value }, { scale: scale.value }],
@@ -10271,6 +10608,18 @@ export function TreeCanvas({ nodes, edges, onNodePress, onNodeLongPress }: TreeC
           })}
         </Animated.View>
       </GestureDetector>
+
+      <Pressable
+        onPress={handleCenterAndToggleLock}
+        accessibilityLabel="Mittig zentrieren"
+        accessibilityHint={panLocked ? 'Pan wieder freigeben' : 'Ansicht zentrieren und Pan fixieren'}
+        style={({ pressed }) => [
+          styles.centerButton,
+          panLocked && styles.centerButtonLocked,
+          pressed && styles.centerButtonPressed,
+        ]}>
+        <IconSymbol name={panLocked ? 'lock.fill' : 'lock.open.fill'} size={22} color="#F3EDFB" />
+      </Pressable>
     </View>
   );
 }
@@ -10278,6 +10627,26 @@ export function TreeCanvas({ nodes, edges, onNodePress, onNodeLongPress }: TreeC
 const styles = StyleSheet.create({
   container: { flex: 1, overflow: 'hidden', backgroundColor: SkillTreeColors.background },
   nodeWrapper: { position: 'absolute', alignItems: 'center' },
+  centerButton: {
+    position: 'absolute',
+    right: 20,
+    bottom: 24,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(26, 16, 37, 0.55)',
+    borderWidth: 1.5,
+    borderColor: SkillTreeColors.chrome.metalBorderDim,
+  },
+  centerButtonLocked: {
+    borderColor: SkillTreeColors.chrome.rune.active,
+    backgroundColor: 'rgba(79, 195, 247, 0.25)',
+  },
+  centerButtonPressed: {
+    opacity: 0.7,
+  },
 });
 </file>
 
@@ -10292,9 +10661,7 @@ const VALID_TYPES = new Set(['task']);
 const MAX_TITLE_WORDS = 3;
 
 // A full tree is a much bigger generation than a single step — give it more room to finish.
-// Full JSON-schema output (thinking_process + nodes + edges) can genuinely take a while on
-// gemini-2.5-flash even for text-only input — 45s was cutting it too close in practice.
-const TREE_REQUEST_TIMEOUT_MS = 75_000;
+const TREE_REQUEST_TIMEOUT_MS = 45_000;
 // Plain "audio in, transcript out" with no tree reasoning — much lighter than tree generation.
 const TRANSCRIBE_TIMEOUT_MS = 20_000;
 
@@ -10647,13 +11014,13 @@ export class GeminiClient implements LlmClient {
 </file>
 
 <file path="app/(tabs)/tree.tsx">
-import { Alert, Pressable, StyleSheet, View } from 'react-native';
+import { Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { IconSymbol } from '@/components/ui/icon-symbol';
+import { ScreenHeader } from '@/components/ui/screen-header';
 import { TreeCanvas } from '@/components/skill-tree/tree-canvas';
 // KI-Orb deaktiviert bis auf Weiteres — Ersatz: One-Shot Tree-Generierung bei Projekterstellung
 // import { FloatingOrb } from '@/components/orb/floating-orb';
@@ -10662,10 +11029,18 @@ import { useActiveProjectId } from '@/hooks/use-active-project-id';
 import { useSkillTreeViewModel } from '@/viewmodel/skill-tree-viewmodel';
 import { SkillTreeColors } from '@/constants/skill-tree-theme';
 
+interface InsertChooser {
+  nodeId: string;
+  nodeTitle: string;
+}
+
 export default function TreeScreen() {
   const [activeProjectId] = useActiveProjectId();
   const { nodes, edges, loading, reload } = useSkillTreeViewModel(activeProjectId);
+  const [insertChooser, setInsertChooser] = useState<InsertChooser | null>(null);
   const tint = useThemeColor({}, 'tint');
+  const textColor = useThemeColor({}, 'text');
+  const tintText = useThemeColor({}, 'tintText');
 
   useFocusEffect(
     useCallback(() => {
@@ -10676,28 +11051,22 @@ export default function TreeScreen() {
   const handleNodeLongPress = (id: string) => {
     const node = nodes.find((n) => n.id === id);
     if (!node) return;
+    setInsertChooser({ nodeId: id, nodeTitle: node.title });
+  };
 
-    Alert.alert('Neuen Skill anlegen', `Wo soll er relativ zu "${node.title}" stehen?`, [
-      { text: 'Abbrechen', style: 'cancel' },
-      {
-        text: 'Danach einfügen',
-        onPress: () => router.push({ pathname: '/node/new', params: { anchorNodeId: id, insertMode: 'after' } }),
-      },
-      {
-        text: 'Davor einfügen',
-        onPress: () => router.push({ pathname: '/node/new', params: { anchorNodeId: id, insertMode: 'before' } }),
-      },
-    ]);
+  const handleInsert = (insertMode: 'before' | 'after') => {
+    if (!insertChooser) return;
+    const anchorNodeId = insertChooser.nodeId;
+    setInsertChooser(null);
+    router.push({ pathname: '/node/new', params: { anchorNodeId, insertMode } });
   };
 
   if (!activeProjectId) {
     return (
       <ThemedView style={styles.container}>
-        <ThemedText type="title" style={styles.title}>
-          Tree
-        </ThemedText>
+        <ScreenHeader title="Skilltree" />
         <ThemedText style={styles.empty}>
-          Kein aktives Projekt. Wähle im Projects-Tab ein Projekt aus.
+          Kein aktives Projekt. Wähle im Projekte-Tab ein Projekt aus.
         </ThemedText>
       </ThemedView>
     );
@@ -10705,12 +11074,7 @@ export default function TreeScreen() {
 
   return (
     <ThemedView style={styles.container}>
-      <View style={styles.header}>
-        <ThemedText type="title">Tree</ThemedText>
-        <Pressable onPress={() => router.push('/node/new')} hitSlop={8}>
-          <IconSymbol name="plus.circle.fill" size={30} color={tint} />
-        </Pressable>
-      </View>
+      <ScreenHeader title="Skilltree" />
 
       {!loading && nodes.length === 0 ? (
         <ThemedText style={styles.empty}>
@@ -10727,6 +11091,29 @@ export default function TreeScreen() {
         </View>
       )}
 
+      <Modal visible={!!insertChooser} transparent animationType="fade" onRequestClose={() => setInsertChooser(null)}>
+        <Pressable style={styles.backdrop} onPress={() => setInsertChooser(null)}>
+          <Pressable style={[styles.chooserCard, { backgroundColor: SkillTreeColors.background }]} onPress={() => {}}>
+            <ThemedText type="defaultSemiBold" style={styles.chooserTitle}>
+              Wo soll er relativ zu &quot;{insertChooser?.nodeTitle}&quot; stehen?
+            </ThemedText>
+            <Pressable onPress={() => handleInsert('after')} style={[styles.chooserButton, { backgroundColor: tint }]}>
+              <ThemedText style={[styles.chooserButtonLabel, { color: tintText }]}>Danach einfügen</ThemedText>
+            </Pressable>
+            <Pressable onPress={() => handleInsert('before')} style={[styles.chooserButton, { backgroundColor: tint }]}>
+              <ThemedText style={[styles.chooserButtonLabel, { color: tintText }]}>Davor einfügen</ThemedText>
+            </Pressable>
+            {/* iOS/Android: tapping anywhere outside this card dismisses it, no cancel button
+                needed. Web has no such tap-outside gesture affordance, so keep an explicit one. */}
+            {Platform.OS === 'web' && (
+              <Pressable onPress={() => setInsertChooser(null)} style={styles.chooserCancel}>
+                <ThemedText style={[styles.chooserCancelLabel, { color: textColor }]}>Abbrechen</ThemedText>
+              </Pressable>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       {/* KI-Orb deaktiviert bis auf Weiteres — Ersatz: One-Shot Tree-Generierung bei Projekterstellung
       <View pointerEvents="box-none" style={styles.orbLayer}>
         <FloatingOrb />
@@ -10737,7 +11124,7 @@ export default function TreeScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, paddingTop: 60 },
+  container: { flex: 1 },
   canvasBackground: { flex: 1, backgroundColor: SkillTreeColors.background },
   orbLayer: {
     ...StyleSheet.absoluteFillObject,
@@ -10745,15 +11132,32 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     paddingBottom: 24,
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    marginBottom: 12,
-  },
-  title: { paddingHorizontal: 20 },
   empty: { opacity: 0.6, marginTop: 20, paddingHorizontal: 20 },
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  chooserCard: {
+    width: '100%',
+    maxWidth: 340,
+    borderRadius: 16,
+    borderCurve: 'continuous',
+    padding: 20,
+    gap: 10,
+  },
+  chooserTitle: { marginBottom: 4, textAlign: 'center' },
+  chooserButton: {
+    paddingVertical: 14,
+    borderRadius: 14,
+    borderCurve: 'continuous',
+    alignItems: 'center',
+  },
+  chooserButtonLabel: { fontWeight: '600', fontSize: 16 },
+  chooserCancel: { marginTop: 4, alignItems: 'center', paddingVertical: 10 },
+  chooserCancelLabel: { opacity: 0.7 },
 });
 </file>
 

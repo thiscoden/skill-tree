@@ -24,7 +24,7 @@ export default function NewProjectScreen() {
 
   const finish = (projectId: string) => {
     setActiveProjectId(projectId);
-    router.back();
+    router.dismissTo('/tree');
   };
 
   const generate = async (values: ProjectFormValues) => {

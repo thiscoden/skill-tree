@@ -4,7 +4,7 @@ import { useCallback, useState } from 'react';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { IconSymbol } from '@/components/ui/icon-symbol';
+import { ScreenHeader } from '@/components/ui/screen-header';
 import { TreeCanvas } from '@/components/skill-tree/tree-canvas';
 // KI-Orb deaktiviert bis auf Weiteres — Ersatz: One-Shot Tree-Generierung bei Projekterstellung
 // import { FloatingOrb } from '@/components/orb/floating-orb';
@@ -25,6 +25,7 @@ export default function TreeScreen() {
   const tint = useThemeColor({}, 'tint');
   const textColor = useThemeColor({}, 'text');
   const tintText = useThemeColor({}, 'tintText');
+  const canvasBg = useThemeColor({}, 'background');
 
   useFocusEffect(
     useCallback(() => {
@@ -48,11 +49,9 @@ export default function TreeScreen() {
   if (!activeProjectId) {
     return (
       <ThemedView style={styles.container}>
-        <ThemedText type="title" style={styles.title}>
-          Tree
-        </ThemedText>
+        <ScreenHeader title="Skilltree" />
         <ThemedText style={styles.empty}>
-          Kein aktives Projekt. Wähle im Projects-Tab ein Projekt aus.
+          Kein aktives Projekt. Wähle im Projekte-Tab ein Projekt aus.
         </ThemedText>
       </ThemedView>
     );
@@ -60,19 +59,14 @@ export default function TreeScreen() {
 
   return (
     <ThemedView style={styles.container}>
-      <View style={styles.header}>
-        <ThemedText type="title">Tree</ThemedText>
-        <Pressable onPress={() => router.push('/node/new')} hitSlop={8}>
-          <IconSymbol name="plus.circle.fill" size={30} color={tint} />
-        </Pressable>
-      </View>
+      <ScreenHeader title="Skilltree" />
 
       {!loading && nodes.length === 0 ? (
         <ThemedText style={styles.empty}>
           Noch keine Knoten. Tippe auf + um deinen ersten Schritt anzulegen.
         </ThemedText>
       ) : (
-        <View style={styles.canvasBackground}>
+        <View style={[styles.canvasBackground, { backgroundColor: canvasBg }]}>
           <TreeCanvas
             nodes={nodes}
             edges={edges}
@@ -115,22 +109,14 @@ export default function TreeScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, paddingTop: 60 },
-  canvasBackground: { flex: 1, backgroundColor: SkillTreeColors.background },
+  container: { flex: 1 },
+  canvasBackground: { flex: 1 },
   orbLayer: {
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'flex-end',
     paddingBottom: 24,
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    marginBottom: 12,
-  },
-  title: { paddingHorizontal: 20 },
   empty: { opacity: 0.6, marginTop: 20, paddingHorizontal: 20 },
   backdrop: {
     flex: 1,
